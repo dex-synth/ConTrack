@@ -237,9 +237,12 @@ class PPO:
         else:
             w_task = torch.sigmoid(self.lambda_raw).item()
 
-        self.vg_hat = sum(self.vg_buffer) / len(self.vg_buffer)
-        self.vg_hat_buffer.append(self.vg_hat)
-        self.vg_star = max(self.vg_hat_buffer)
+        # Long clips can fill a rollout before any episode finishes. Keep the
+        # initial CMDP weight until an actual episode return is available.
+        if self.vg_buffer:
+            self.vg_hat = sum(self.vg_buffer) / len(self.vg_buffer)
+            self.vg_hat_buffer.append(self.vg_hat)
+            self.vg_star = max(self.vg_hat_buffer)
 
         # Get mini batch generator
         if self.policy.is_recurrent:
@@ -446,7 +449,7 @@ class PPO:
         # Clear the storage
         self.storage.clear()
 
-        if self.num_updates > self.cmdp_warmup_iters:
+        if self.num_updates > self.cmdp_warmup_iters and self.vg_buffer:
             with torch.no_grad():
                 vg_ratio = float(self.vg_hat / (self.vg_star + 1e-8))
                 self.lambda_raw += self.cmdp_lambda_lr * (

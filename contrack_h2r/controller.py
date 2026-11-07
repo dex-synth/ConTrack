@@ -1,0 +1,128 @@
+"""Complete feedback controller; deliberately imports no simulator."""
+
+import numpy as np
+import torch
+
+from rsl_rl_contrack.modules import ActorCritic
+
+from .inputs import digest, load_prepared, read_json
+from .reference import Reference
+
+
+class Controller:
+    def __init__(self, prepared, checkpoint, device='cpu'):
+        self.binding, arrays = load_prepared(prepared)
+        self.layout, self.task = self.binding['layout'], self.binding['task']
+        self.device = device
+        self.reference = Reference(self.binding, arrays, device)
+        manifest = read_json(checkpoint.with_suffix('.json'))
+        if manifest['checkpoint_sha256'] != digest(checkpoint):
+            raise ValueError('Checkpoint checksum changed')
+        saved = torch.load(checkpoint, map_location=device, weights_only=False)
+        metadata = saved['infos']['h2r']
+        if (metadata['prepared_id'] != self.binding['prepared_id'] or metadata['layout'] != self.layout
+                or metadata != {k: v for k, v in manifest.items() if k != 'checkpoint_sha256'}):
+            raise ValueError('Checkpoint does not match preparation/deployment metadata')
+        # Shapes are determined by the common feature function; no physical world is created.
+        h, p, n = len(self.layout['hands']), len(self.layout['parts']), len(self.layout['joint_names'])
+        zero = lambda *shape: torch.zeros(shape, device=device)
+        dummy = dict(robot_q=zero(1, n), robot_dq=zero(1, n), part_pose=zero(1, p, 7),
+                     part_velocity=zero(1, p, 6), contact=zero(1, h, p, 10))
+        cfg = dict(metadata['train_config']['policy'])
+        if cfg.pop('class_name') != 'ActorCritic':
+            raise ValueError('Only the verified nonrecurrent ConTrack policy is supported')
+        self.policy = ActorCritic(self.reference.observations(dummy, zero(1)),
+                                 metadata['train_config']['obs_groups'], n, **cfg).to(device).eval()
+        self.policy.load_state_dict(saved['model_state_dict'])
+        self.checkpoint_hash = manifest['checkpoint_sha256']
+        self.initial = dict(zip(self.layout['joint_names'], arrays['robot_q'][0].tolist()))
+        self.next_tick = {}
+        self.finished = set()
+
+    def start(self, hello):
+        if hello.get('type') != 'hello' or hello.get('protocol') != 'h2r-evaluation-v1':
+            raise ValueError('Unsupported evaluator protocol')
+        for key in ('task_id', 'bundle_id', 'robot_manifest_sha256', 'dt_s', 'control_ticks', 'end_tick'):
+            if hello[key] != self.task[key]:
+                raise ValueError(f'Evaluator differs from prepared task: {key}')
+        if (set(hello['joint_names']) != set(self.layout['joint_names'])
+                or len(hello['joint_names']) != len(self.layout['joint_names'])):
+            raise ValueError('Incomplete evaluator joint set')
+        self.joint_order = [hello['joint_names'].index(n) for n in self.layout['joint_names']]
+        if [hello['joint_units'][i] for i in self.joint_order] != self.layout['joint_units']:
+            raise ValueError('Evaluator joint units differ')
+        observation = hello['observation']
+        if (not observation['contacts'] or observation['contact_schema'] != 'h2r-body-contacts-v1'
+                or observation['quaternion'] != 'wxyz' or observation['body_velocity'] != 'world_at_body_origin'
+                or not set(self.layout['part_bodies']) <= set(observation['bodies'])):
+            raise ValueError('Required body/contact observations unavailable')
+        if hello['object'] != self.task['object']:
+            raise ValueError('Object semantics differ')
+        self.next_tick = {e['episode_id']: 0 for e in hello['episodes']}
+        if len(self.next_tick) != len(hello['episodes']) or not self.next_tick:
+            raise ValueError('Invalid episode IDs')
+        return dict(type='start', task_id=hello['task_id'],
+                    binding=dict(bundle_id=hello['bundle_id'], robot_manifest_sha256=hello['robot_manifest_sha256'],
+                                 method='ConTrack-H2R', controller={'checkpoint_sha256': self.checkpoint_hash,
+                                                               'prepared_id': self.binding['prepared_id']}),
+                    requirements=dict(bodies=self.layout['part_bodies'], contacts=True,
+                                      control_dt_s=self.reference.dt),
+                    initial_robot={e: self.initial for e in self.next_tick})
+
+    def state(self, frames):
+        h, p = len(self.layout['hands']), len(self.layout['parts'])
+        contacts = np.zeros((len(frames), h, p, 10), dtype=np.float32)
+        bodies = {body: i for i, body in enumerate(self.layout['part_bodies'])}
+        for i, frame in enumerate(frames):
+            records = frame['contacts']
+            if records is None or records['solve_tick'] != (frame['tick']-1 if frame['tick'] else None):
+                raise ValueError('Missing or mistimed actual contacts')
+            for record in records['records']:
+                for robot, obj in ((record['body1'], record['body2']), (record['body2'], record['body1'])):
+                    if robot in self.layout['contact_bodies'] and obj in bodies:
+                        hand, slot = self.layout['contact_bodies'][robot]
+                        contacts[i, hand, bodies[obj], slot] = 1
+        body_state = np.asarray([[f['bodies'][b] for b in self.layout['part_bodies']] for f in frames])
+        state = dict(robot_q=np.asarray([f['robot_q'] for f in frames])[:, self.joint_order],
+                     robot_dq=np.asarray([f['robot_dq'] for f in frames])[:, self.joint_order],
+                     part_pose=body_state[..., :7], part_velocity=body_state[..., 7:13], contact=contacts)
+        if body_state.shape != (len(frames), p, 13) or not all(np.isfinite(v).all() for v in state.values()):
+            raise ValueError('Invalid physical feedback')
+        if not np.allclose(np.linalg.norm(body_state[..., 3:7], axis=-1), 1, atol=1e-4):
+            raise ValueError('Invalid physical quaternion')
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=self.device) for k, v in state.items()}
+
+    @torch.inference_mode()
+    def step(self, message):
+        if message.get('type') == 'error':
+            raise ValueError(f"Evaluator rejected controller: {message['message']}")
+        if message.get('type') != 'frames':
+            raise ValueError('Expected evaluator frames')
+        frames = message['episodes']
+        if {f['episode_id'] for f in frames} != set(self.next_tick) or len(frames) != len(self.next_tick):
+            raise ValueError('Episode set changed')
+        active = []
+        for frame in frames:
+            eid = frame['episode_id']
+            if frame['done']:
+                self.finished.add(eid)
+                continue
+            if (eid in self.finished or frame['tick'] != self.next_tick[eid]
+                    or frame['tick'] >= self.task['end_tick']
+                    or not np.isclose(frame['time_s'], frame['tick']*self.task['dt_s'], atol=1e-10, rtol=0)):
+                raise ValueError('Invalid control tick or episode lifecycle')
+            active.append(frame)
+        if bool(message['done']) != (len(self.finished) == len(self.next_tick)):
+            raise ValueError('Inconsistent batch termination')
+        if not active:
+            return None
+        time = torch.tensor([f['time_s'] for f in active], device=self.device, dtype=torch.float32)
+        obs = self.reference.observations(self.state(active), time)
+        actions = self.policy.act_inference(obs)
+        targets = self.reference.targets(actions, time).cpu().numpy()
+        commands = {}
+        for frame, target in zip(active, targets):
+            eid = frame['episode_id']
+            commands[eid] = dict(tick=frame['tick'], joint_targets=dict(zip(self.layout['joint_names'], target.tolist())))
+            self.next_tick[eid] = min(self.task['end_tick'], frame['tick']+self.task['control_ticks'])
+        return dict(type='step', commands=commands)

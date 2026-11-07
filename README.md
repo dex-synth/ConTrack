@@ -146,6 +146,14 @@ apt-get install -y libxt6 libglu1-mesa vulkan-tools
 vulkaninfo --summary
 ```
 
+## H2R benchmark adaptation
+
+The standalone [`contrack_h2r`](docs/h2r.md) entry points read sealed h2r_bench
+bundles, generate Sharpa IK/contact references, train with direct MuJoCo Warp and
+the existing PyTorch PPO/CMDP, and deploy a feedback controller to the independent
+benchmark evaluator. This task adaptation has its own Python 3.12 environment;
+the original Isaac Lab/PhysX entry points remain available.
+
 ## License
 
 Repository code is released under the BSD 3 Clause License. Third-party assets, dataset clips, and code adapted from upstream projects retain their own terms.
