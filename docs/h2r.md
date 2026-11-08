@@ -1,6 +1,6 @@
 # H2R bundle、直接 MJWarp 训练与统一评估
 
-这是 ConTrack 的 H2R 任务适配：保留仓库内 PyTorch PPO／CMDP、双 critic、奖励分组、adaptive reset library 和阈值课程，将 Isaac Lab 环境迁至直接 `mujoco_warp`。原生 PhysX 入口不变。H2R 的 IK／接触准备是本 fork 的显式配方，不能视为未发布的官方 HDF5 生成链复现。
+这是 ConTrack 的 H2R 任务适配：保留仓库内 PyTorch PPO／CMDP、双 critic、奖励分组、adaptive reset library 和阈值课程，将 Isaac Lab 环境迁至直接 `mujoco_warp`。初始运动学参考使用与 FlashCHORD 相同的 V2D IK 实现和参数，复制来源见 [SOURCE.json](../contrack_h2r/_vendor/v2d/SOURCE.json)。接触准备仍为 ConTrack H2R 配方；这不是未发布的官方 HDF5 生成链复现。
 
 ## 环境
 
@@ -8,10 +8,13 @@
 
 ```bash
 bash scripts/h2r_environment.sh /opt/h2r/contrack
+bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 /opt/h2r/contrack/bin/python -m contrack_h2r.prepare --help
 ```
 
 `h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 PyTorch 2.9.0 CUDA 12.8、MuJoCo／MJWarp 3.11.0、Warp 1.16.0。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
+
+原始 MANO 解码运行于独立 Python 3.10 环境，原始 IK 运行于 Python 3.11（Pinocchio 3.7.0、Pink 4.2.0、DAQP 0.10.3）。`mano-requirements.lock` 和 `ik-requirements.lock` 固定依赖；`manotorch` 和 `chumpy` 固定源码提交与压缩包 hash。它们通过文件与主准备进程交接，训练和在线推理不导入这些包。复制的源码位于本仓库内，不需要安装完整 V2D、FlashCHORD 或 Isaac Lab。
 
 ## 输入与准备
 
@@ -20,18 +23,25 @@ bash scripts/h2r_environment.sh /opt/h2r/contrack
 ```bash
 /opt/h2r/contrack/bin/python -m contrack_h2r.prepare \
   --bundle /path/to/human/full --robot /path/to/robot \
-  --task /path/to/common-task --output /path/to/new-prepared
+  --task /path/to/common-task --output /path/to/new-prepared \
+  --mano-root /path/to/mano \
+  --loader-python /opt/h2r/contrack-ik/mano/bin/python \
+  --ik-python /opt/h2r/contrack-ik/ik/bin/python
 ```
 
-入口校验 bundle v1／v2／v3、task 身份、完整资源 hash、机器人和时钟。当前机器人布局限定为 `virtual_wrist_sharpa_wave_bimanual`／`virtual_wrist_sharpa_wave_right`；需要已解码的 MANO 21 joints（16 joints＋5 tips）和 778 vertices。未知机器人、未开启接触、缺失几何、不同参考、非有限数据和不一致关节树明确拒绝。ARCTIC 旧包未声明参与手时，以所绑定共同 task 的完整 robot hands 为兼容规则，并在 binding 中记录。
+入口校验 bundle v1／v2／v3、task 身份、完整资源 hash、机器人和时钟。当前机器人布局限定为 `virtual_wrist_sharpa_wave_bimanual`／`virtual_wrist_sharpa_wave_right`；需要已解码的 MANO 21 joints（16 joints＋5 tips）、778 vertices、完整 MANO 参数及对应模型。未知机器人、未开启接触、缺失几何、不同参考、非有限数据和不一致关节树明确拒绝。ARCTIC 旧包未声明参与手时，以所绑定共同 task 的完整 robot hands 为兼容规则，并在 binding 中记录。
 
 方法准备包括：
 
-- 用共同 MJCF 的 FK／Jacobian 做有界阻尼 IK，拟合腕位置、掌面方向与五指尖；前一帧解提供轻量连续性正则。掌面方向由腕、middle MCP 和 index/pinky MCP 定义，直接求解虚拟腕串联关节，不将 rotvec 当关节角。腕位置权重 2，指尖权重 1，方向权重 0.08，正则 1e-5；默认每帧最多 40 次迭代。
+- 用原始 `MANO.forward()`／`AxisLayerFK` 生成世界坐标中的关节位置和朝向，保留 FlashCHORD 的指尖顶点定义；验证手部网格和非指尖关节与共同 bundle 一致。数据集适配仅转换参数表示、坐标与腕中心约定。
+- 原样调用 `SharpaHandKinematics`：腕位置／朝向、五指尖位置／朝向及原始中间指节目标与权重全部保留。使用 DAQP、100 次最大迭代、200 Hz 内部迭代步长、1e-6 位置误差变化阈值、尺度 1.0，关闭 relative-frame tasks；保留原始首帧初始化和上一帧 warm start。参考时间轴不变，也不追加平滑、碰撞优化或另一套收敛条件。
+- 从共同机器人提取手部子树，添加原始 task sites，在 Pinocchio 自由腕上求解，然后用 FlashCHORD 的连续腕角转换映射为共同六关节腕。随机非零构型的 FK 和限位校验贯穿 Pinocchio／MuJoCo 边界。
 - 将皮肤顶点按最近 MANO 指骨分成 15 个 segment，对每个部件表面计算 8 mm 阈值内的平均局部点，再按原生 OR／有效点均值规则合并为 10 槽。固定 distal pad 归入 DP 槽，静态桌面不占 actor 的物体接触槽。
 - 使用共同 root＋hinge 广义坐标验证全部 part 的 FK。完整有限桌面、支撑、质量惯量、碰撞体、执行器和被动关节直接来自 task MJCF，不从示范重新拟合。
 
-`prepared/` 包含完整 task 副本、方法 `reference.npz`、`binding.json`、`prepare_report.json` 和 `training_physics.json`。参考保留原始时间轴；准备报告记录指尖误差、接触数量和首帧穿透。初始化诊断失败不会移动物体或改变共同条件，eval 仍独立执行初始化检查。准备输出不覆盖输入或已有目录。
+`prepared/` 包含完整 task 副本、方法 `reference.npz`、`binding.json`、`prepare_report.json` 和 `training_physics.json`。`ik/` 封存原始 MANO 特征、IK 模型、逐帧求解结果、来源、配方与环境版本；`ik/penetration.json` 记录整段碰撞诊断，包含物体之间的接触。初始化诊断失败不会移动物体或修改 IK，eval 仍独立执行初始化检查。准备输出不覆盖输入或已有目录，失败时清理本次未完成输出。
+
+新默认配方为 `flashchord-h2r-sharpa-ik-v1`，替换此前 `contrack-h2r-geometric-ik-v1`。旧 prepared／checkpoint 保持原绑定；切换 IK 后须生成新的 prepared 并重新训练，不能将旧 checkpoint 改绑到新参考。原 `--ik-iterations` 参数已移除，原始求解参数固定在配方中。
 
 ## 训练与续训
 
@@ -74,7 +84,8 @@ GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512�
 | 模块 | 职责 |
 | --- | --- |
 | `inputs.py`、`layout.py` | 输入身份、封存资源、具名布局 |
-| `prepare.py`、`retarget.py`、`contacts.py` | H2R IK、参考接触、产物 |
+| `prepare.py`、`retarget.py`、`contacts.py` | 准备编排、隔离 IK 调用、穿透诊断、ConTrack 接触参考 |
+| `mano_features.py`、`ik_worker.py`、`_vendor/v2d/` | 原始 MANO／IK 及输入、模型、具名关节边界转换 |
 | `mjwarp_scene.py`、`mjwarp_env.py` | 共同 MJCF、GPU 批量物理、VecEnv、真实接触 |
 | `rewards.py`、`resets.py` | 原生奖励公式、自适应库和课程 |
 | `reference.py` | 训练／推理共享的时间、特征和动作解码 |
@@ -88,3 +99,5 @@ CONTRACK_TEST_GPU=1 CUDA_VISIBLE_DEVICES=0 \
 ```
 
 测试包含原生奖励 callback 数值对照、参考终点与四元数符号、输入篡改、协议分包、真实接触、body 原点速度、mask reset、PPO／CMDP 续训和完整控制输出一致性。GPU 测试需显式启用。短训练与闭环检查验证接入正确性，不证明论文性能或任务成功；实际任务结果与已验证组合保留在对应运行目录。
+
+IK 测试还检查固定源码、世界坐标转换和只读穿透诊断。提供独立原 FlashCHORD 与 ConTrack 完整 ARCTIC 准备产物时，设置 `CONTRACK_IK_PARITY_ROOT=/path/to/check-directory` 启用全帧特征、关节解、时间轴和迭代次数对照；目录要求见 `tests/h2r/test_flashchord_ik.py`。单纯使用同一 solver 包不构成配方等价验证。

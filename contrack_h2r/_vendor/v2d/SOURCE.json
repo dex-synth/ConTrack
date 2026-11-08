@@ -1,0 +1,91 @@
+{
+  "repository": "https://github.com/dex-synth/video_to_data.git",
+  "commit": "a2b209988d615d9013a0589aef64d3f47342a7e0",
+  "recipe": "flashchord-h2r-sharpa-ik-v1",
+  "files": {
+    "robotic_grounding/retarget/__init__.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/__init__.py",
+      "sha256": "9f5fd6629ec24b52b79039596cf8af55b370deb8dc633da5e78fc2b380497a4e"
+    },
+    "robotic_grounding/retarget/hand_kinematics.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/hand_kinematics.py",
+      "sha256": "f2e6ed276a6b779025067f229262aa84cf7d6a0a654deddf824c20545c0ff8da"
+    },
+    "robotic_grounding/retarget/params.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/params.py",
+      "sha256": "2f2e36e493deb6aa8684e39befdf6b0bbd58f329668eb3abac2d00fe6c4b4c65"
+    },
+    "robotic_grounding/retarget/utils.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/utils.py",
+      "sha256": "fd8812845a01819a81382a75698d9fe77aff2272df7cc3df5a899e2899ed07e2"
+    },
+    "robotic_grounding/retarget/pinocchio_viser_visualizer.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/pinocchio_viser_visualizer.py",
+      "sha256": "2f95c15804b1ed9a77f860bc098657df101940d9abc86176095a36e932983dc6"
+    },
+    "robotic_grounding/retarget/retarget_utils.py": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/retarget/retarget_utils.py",
+      "sha256": "17e40d8ead800c8db7a303594df95f51eb85bc4e1bfa145e992da8173c305c98"
+    },
+    "robotic_grounding/assets/xmls/sharpawave/left_sharpawave.xml": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/assets/xmls/sharpawave/left_sharpawave.xml",
+      "sha256": "cc92ce4bf22bbe4a4f708297acbc3367721702fcd15e85cf99a152ed15354cc5"
+    },
+    "robotic_grounding/assets/xmls/sharpawave/right_sharpawave.xml": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/assets/xmls/sharpawave/right_sharpawave.xml",
+      "sha256": "db65a8bf484d7ac2d153eeb76e458baac0bada27d7ff3d28a3e0873b0b62b107"
+    },
+    "robotic_grounding/assets/xmls/sharpawave/NOTICE": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/assets/xmls/sharpawave/NOTICE",
+      "sha256": "b3c17c91f08f3be8aab01dd13a49651bbea4baf2fc1614b898c06eec081cda74"
+    },
+    "robotic_grounding/assets/xmls/sharpawave/LICENSE": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/assets/xmls/sharpawave/LICENSE",
+      "sha256": "ae93e4fe3d2ea28dfcd49cee9307cf2d8b7e9f7467133ec55d92d76c0a519720"
+    },
+    "robotic_grounding/assets/xmls/sharpawave/README.md": {
+      "path": "robotic_grounding/source/robotic_grounding/robotic_grounding/assets/xmls/sharpawave/README.md",
+      "sha256": "7db75e2e0bccf22ef94364600103baaaccaafae164d5d46d4f402f0c167918a2"
+    },
+    "v2d/task_library_loader/lib/read_mano.py": {
+      "path": "reconstruction/modules/v2d_task_library_loader/lib/read_mano.py",
+      "sha256": "0fa07b09d25e95c7701dce4b9bad04fcf44af39fc873bf96f99a0acdd231ae9e"
+    },
+    "flash_chord/h2r/wrist.py": {
+      "path": "robotic_grounding/flash_chord/src/flash_chord/h2r/wrist.py",
+      "sha256": "91a96cc45074f5802d7e1320c758dc35cc5018ff3081e7ff4b89879a7d813501"
+    },
+    "LICENSE": {
+      "path": "LICENSE",
+      "sha256": "e87dc2a40b553c5f52acb3909f479afbeac8c35a85328fceaa0cab15ed50b9fc"
+    },
+    "flash_chord/h2r/checks.py": {
+      "path": "robotic_grounding/flash_chord/src/flash_chord/h2r/prepare.py",
+      "extracts": {
+        "check_ik_model": "50f53e545acec6fe6784906867919a42a6de964acf097ea39ce0172b4a0299ec"
+      },
+      "source_file_sha256": "b52e5c9f3415942ed370d879c35c8a91c47a2ade5fe79fe9d81cbb7dfa4691de",
+      "sha256": "a2cdd0c9031b2005b9c0ea6699fa629bdc147aa19693ed32dbf7cf3d5090edd7"
+    },
+    "flash_chord/h2r/inputs.py": {
+      "path": "robotic_grounding/flash_chord/src/flash_chord/h2r/inputs.py",
+      "extracts": {
+        "DIGITS": "c2d3087fca73cae1bcd79020b64bf2a4d3fd203b0439ce7dbf6e6e785942d623",
+        "frame_names": "8e576d15cf4af4c04d9d2cfc60830f604b48c55610eaf24a5d053bbd226ad2f7"
+      },
+      "source_file_sha256": "16520b1ab08a74eb8e8f22d640e43d4253426989433ac139b6d0ef330cf6a1f2",
+      "sha256": "d7f58cf95172b379a89b5f22b6ecbf51e88a22f60fb63b571b49d8c848fba463"
+    },
+    "flash_chord/h2r/assets.py": {
+      "path": "robotic_grounding/flash_chord/src/flash_chord/h2r/assets.py",
+      "extracts": {
+        "numbers": "914ccada87c1906fdf39eb612ddcfaed26db53e9b4471dc28952655026a29b18",
+        "portable_xml": "c03aa731ffa607b43bfa5d9a145133f5efd120596137fba7314063d0c985b3ce"
+      },
+      "source_file_sha256": "00d12cab7ff4dd450fc925f823b90ba3814e5a8d72dcfd55e5040d076160d82a",
+      "sha256": "d0018c3d8d715b31205a447cd7a516fa1d924c8b5d56838f37178b15b5dc7375"
+    }
+  },
+  "package_initializers": "Empty initializers isolate copied modules from unrelated upstream runtime imports.",
+  "note": "Source files are byte-for-byte copies; entries with extracts contain verbatim functions/constants with isolated imports. Exact hashes record the working tree source, including H2R dataset-adapter changes outside the extracted functions."
+}

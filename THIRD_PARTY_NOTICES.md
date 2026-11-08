@@ -2,6 +2,19 @@
 
 This repository contains code, assets, and data with separate upstream sources.
 
+## V2D / FlashCHORD kinematic initialization
+
+The H2R preparation copies the V2D hand IK and MANO wrapper used by FlashCHORD
+from https://github.com/dex-synth/video_to_data. Exact revisions, source paths,
+verbatim extracts and file hashes are recorded in
+`contrack_h2r/_vendor/v2d/SOURCE.json`. Original NVIDIA copyright and Apache-2.0
+headers are retained, together with the upstream license. The Sharpa task-site
+templates retain their separate asset license and notice in that directory.
+
+The isolated MANO environment installs `manotorch` (GPL-3.0) and `chumpy`
+(MIT) from pinned upstream sources; they are not copied into this repository.
+MANO model files remain external, separately licensed inputs.
+
 ## Isaac Lab
 
 Source

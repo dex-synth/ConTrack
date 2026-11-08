@@ -28,8 +28,11 @@ def write_json(path, value):
 
 def implementation_hashes():
     root = Path(__file__).resolve().parents[1]
-    return {str(p.relative_to(root)): digest(p) for package in ('contrack_h2r', 'rsl_rl_contrack')
-            for p in sorted((root / package).rglob('*.py'))}
+    files = {p for package in ('contrack_h2r', 'rsl_rl_contrack') for p in (root / package).rglob('*.py')}
+    files.update(p for p in (root / 'contrack_h2r/_vendor').rglob('*')
+                 if p.is_file() and '__pycache__' not in p.parts)
+    files.update((root / 'h2r').glob('*requirements.lock'))
+    return {str(p.relative_to(root)): digest(p) for p in sorted(files)}
 
 
 def local_file(root, name):
