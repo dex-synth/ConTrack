@@ -49,7 +49,7 @@ class ResetLibrary:
         envs = ids[:, None].expand_as(grid)[valid]
         count = torch.bincount(frames, minlength=self.length)
         mean = torch.bincount(frames, weights=remaining, minlength=self.length)/count.clamp(min=1)
-        self.track = torch.where(count > 0, 0.95*self.track+0.05*mean, self.track)
+        self.track.copy_(torch.where(count > 0, 0.95*self.track+0.05*mean, self.track))
         self.best.mul_(0.99999)
         better = (frames != 0) & (remaining > self.best[frames])
         frames, remaining, envs = frames[better], remaining[better], envs[better]

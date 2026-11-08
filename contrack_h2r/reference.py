@@ -5,9 +5,9 @@ from tensordict import TensorDict
 
 
 class Reference:
-    def __init__(self, binding, arrays, device):
+    def __init__(self, binding, arrays, device, control_dt=None):
         self.layout = binding['layout']
-        self.dt = binding['task']['dt_s'] * binding['task']['control_ticks']
+        self.dt = control_dt if control_dt is not None else binding['task']['dt_s'] * binding['task']['control_ticks']
         self.data = {k: torch.as_tensor(v, device=device, dtype=torch.float32)
                      for k, v in arrays.items()}
         self.time = self.data['time_s']

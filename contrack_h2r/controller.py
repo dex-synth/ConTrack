@@ -14,12 +14,14 @@ class Controller:
         self.binding, arrays = load_prepared(prepared)
         self.layout, self.task = self.binding['layout'], self.binding['task']
         self.device = device
-        self.reference = Reference(self.binding, arrays, device)
         manifest = read_json(checkpoint.with_suffix('.json'))
         if manifest['checkpoint_sha256'] != digest(checkpoint):
             raise ValueError('Checkpoint checksum changed')
         saved = torch.load(checkpoint, map_location=device, weights_only=False)
         metadata = saved['infos']['h2r']
+        physics = metadata['training_physics']
+        control_dt = physics.get('control_ticks', self.task['control_ticks']) * physics['timestep_s']
+        self.reference = Reference(self.binding, arrays, device, control_dt)
         if (metadata['prepared_id'] != self.binding['prepared_id'] or metadata['layout'] != self.layout
                 or metadata != {k: v for k, v in manifest.items() if k != 'checkpoint_sha256'}):
             raise ValueError('Checkpoint does not match preparation/deployment metadata')
@@ -45,6 +47,8 @@ class Controller:
         for key in ('task_id', 'bundle_id', 'robot_manifest_sha256', 'dt_s', 'control_ticks', 'end_tick'):
             if hello[key] != self.task[key]:
                 raise ValueError(f'Evaluator differs from prepared task: {key}')
+        if not np.isclose(hello['dt_s'] * hello['control_ticks'], self.reference.dt, atol=1e-12, rtol=0):
+            raise ValueError('Evaluator must deliver real feedback at the trained policy frequency')
         if (set(hello['joint_names']) != set(self.layout['joint_names'])
                 or len(hello['joint_names']) != len(self.layout['joint_names'])):
             raise ValueError('Incomplete evaluator joint set')

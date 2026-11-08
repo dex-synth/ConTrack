@@ -11,7 +11,7 @@ import torch
 from rsl_rl_contrack.runners import OnPolicyRunner
 
 from .inputs import digest, implementation_hashes, write_json
-from .mjwarp_env import MJWarpEnv
+from .mjlab_env import make_env
 
 
 def training_config():
@@ -29,15 +29,16 @@ def training_config():
 
 class H2RRunner(OnPolicyRunner):
     def __init__(self, env, cfg, output, seed):
-        self.deployment = dict(format='contrack-h2r-deployment-v1', prepared_id=env.binding['prepared_id'],
-                               layout=env.layout, task_id=env.binding['task']['task_id'],
-                               train_config=deepcopy(cfg), seed=seed, training_physics=env.audit,
+        self.task = env.unwrapped.task_state
+        self.deployment = dict(format='contrack-h2r-deployment-v1', prepared_id=self.task.binding['prepared_id'],
+                               layout=self.task.layout, task_id=self.task.binding['task']['task_id'],
+                               train_config=deepcopy(cfg), seed=seed, training_physics=self.task.audit,
                                implementation_sha256=implementation_hashes())
         super().__init__(env, deepcopy(cfg), str(output), env.device)
 
     def save(self, path, infos=None):
         infos = dict(infos or {})
-        infos.update(h2r=self.deployment, reset_library=self.env.library.state_dict(),
+        infos.update(h2r=self.deployment, reset_library=self.task.library.state_dict(),
                      torch_rng=torch.get_rng_state(), cuda_rng=torch.cuda.get_rng_state_all(),
                      numpy_rng=np.random.get_state(), python_rng=random.getstate())
         super().save(path, infos)
@@ -50,15 +51,25 @@ class H2RRunner(OnPolicyRunner):
         for key in ('prepared_id', 'layout', 'train_config'):
             if metadata[key] != self.deployment[key]:
                 raise ValueError(f'Checkpoint differs from this training task: {key}')
+        for key in ('environment', 'timestep_s', 'control_ticks', 'num_envs'):
+            if metadata['training_physics'].get(key) != self.task.audit[key]:
+                raise ValueError(f'Checkpoint training setting differs: {key}')
         infos = self.load(path, map_location=self.device)
-        self.env.library.load_state_dict(infos['reset_library'])
+        self.task.library.load_state_dict(infos['reset_library'])
         # Resume optimization and adaptive state; live simulator worlds start fresh episodes.
-        self.env.reset(torch.arange(self.env.num_envs, device=self.device))
+        self.env.reset()
         torch.set_rng_state(infos['torch_rng'].cpu())
         torch.cuda.set_rng_state_all([s.cpu() for s in infos['cuda_rng']])
         np.random.set_state(infos['numpy_rng'])
         random.setstate(infos['python_rng'])
         self.current_learning_iteration += 1
+
+    def log(self, locs, *args, **kwargs):
+        # Original runner diagnostics; the official MJLab wrapper owns the VecEnv interface.
+        for name in ('it_obj_pos_err_sum', 'it_obj_rot_err_sum', 'it_step_count'):
+            setattr(self.env, name, getattr(self.task, name))
+        super().log(locs, *args, **kwargs)
+        self.task.it_step_count = 0
 
 
 def main():
@@ -66,7 +77,9 @@ def main():
     parser.add_argument('--prepared', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--iterations', type=int, default=100000)
-    parser.add_argument('--num-envs', type=int, default=64)
+    parser.add_argument('--num-envs', type=int, default=4096)
+    parser.add_argument('--physics-hz', type=float, default=120.0)
+    parser.add_argument('--control-hz', type=float, default=60.0)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--resume', type=Path)
@@ -79,15 +92,17 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.set_num_threads(1)
-    env = MJWarpEnv(args.prepared, args.num_envs, args.device, args.contacts_per_world, args.constraints_per_world)
+    env = make_env(args.prepared, args.num_envs, args.device, args.contacts_per_world, args.constraints_per_world,
+                   physics_hz=args.physics_hz, control_hz=args.control_hz, seed=args.seed)
     args.output.mkdir(parents=True, exist_ok=False)
     runner = H2RRunner(env, training_config(), args.output, args.seed)
     if args.resume:
         runner.resume(args.resume)
-    write_json(args.output / 'training_physics.json', env.audit)
+    write_json(args.output / 'training_physics.json', runner.task.audit)
     write_json(args.output / 'deployment.json', runner.deployment)
     runner.learn(args.iterations)
     runner.writer.close()
+    env.close()
 
 
 if __name__ == '__main__':

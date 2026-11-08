@@ -1,6 +1,6 @@
-# H2R bundle、直接 MJWarp 训练与统一评估
+# H2R bundle、MJLab 训练与统一评估
 
-这是 ConTrack 的 H2R 任务适配：保留仓库内 PyTorch PPO／CMDP、双 critic、奖励分组、adaptive reset library 和阈值课程，将 Isaac Lab 环境迁至直接 `mujoco_warp`。初始运动学参考使用与 FlashCHORD 相同的 V2D IK 实现和参数，复制来源见 [SOURCE.json](../contrack_h2r/_vendor/v2d/SOURCE.json)。接触准备仍为 ConTrack H2R 配方；这不是未发布的官方 HDF5 生成链复现。
+这是 ConTrack 的 H2R 任务适配：保留仓库内 PyTorch PPO／CMDP、双 critic、奖励分组、adaptive reset library 和阈值课程，将 Isaac Lab 环境迁至 MJLab 的 `ManagerBasedRlEnv`，物理 backend 为 `mujoco_warp`。初始运动学参考使用与 FlashCHORD 相同的 V2D IK 实现和参数，复制来源见 [SOURCE.json](../contrack_h2r/_vendor/v2d/SOURCE.json)。接触准备仍为 ConTrack H2R 配方；这不是未发布的官方 HDF5 生成链复现。
 
 ## 环境
 
@@ -12,13 +12,13 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 /opt/h2r/contrack/bin/python -m contrack_h2r.prepare --help
 ```
 
-`h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 PyTorch 2.9.0 CUDA 12.8、MuJoCo／MJWarp 3.11.0、Warp 1.16.0。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
+`h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 MJLab 1.6.0、PyTorch 2.9.0 CUDA 12.8、MuJoCo／MJWarp 3.11.0、Warp 1.16.0。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
 
 原始 MANO 解码运行于独立 Python 3.10 环境，原始 IK 运行于 Python 3.11（Pinocchio 3.7.0、Pink 4.2.0、DAQP 0.10.3）。`mano-requirements.lock` 和 `ik-requirements.lock` 固定依赖；`manotorch` 和 `chumpy` 固定源码提交与压缩包 hash。它们通过文件与主准备进程交接，训练和在线推理不导入这些包。复制的源码位于本仓库内，不需要安装完整 V2D、FlashCHORD 或 Isaac Lab。
 
 ## 输入与准备
 
-共同输入由 bench 预处理并封存。先在 bench 环境以相同 human bundle 和 robot bundle 创建开启 `--contacts` 的共同 task，然后运行：
+共同输入由 bench 预处理并封存。先在 bench 环境以相同 human bundle 和 robot bundle 创建开启接触观测、`control_hz=60` 的共同 task，然后运行：
 
 ```bash
 /opt/h2r/contrack/bin/python -m contrack_h2r.prepare \
@@ -37,7 +37,7 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 - 原样调用 `SharpaHandKinematics`：腕位置／朝向、五指尖位置／朝向及原始中间指节目标与权重全部保留。使用 DAQP、100 次最大迭代、200 Hz 内部迭代步长、1e-6 位置误差变化阈值、尺度 1.0，关闭 relative-frame tasks；保留原始首帧初始化和上一帧 warm start。参考时间轴不变，也不追加平滑、碰撞优化或另一套收敛条件。
 - 从共同机器人提取手部子树，添加原始 task sites，在 Pinocchio 自由腕上求解，然后用 FlashCHORD 的连续腕角转换映射为共同六关节腕。随机非零构型的 FK 和限位校验贯穿 Pinocchio／MuJoCo 边界。
 - 将皮肤顶点按最近 MANO 指骨分成 15 个 segment，对每个部件表面计算 8 mm 阈值内的平均局部点，再按原生 OR／有效点均值规则合并为 10 槽。固定 distal pad 归入 DP 槽，静态桌面不占 actor 的物体接触槽。
-- 使用共同 root＋hinge 广义坐标验证全部 part 的 FK。完整有限桌面、支撑、质量惯量、碰撞体、执行器和被动关节直接来自 task MJCF，不从示范重新拟合。
+- 使用共同 root＋hinge 广义坐标验证全部 part 的 FK。完整有限桌面、支撑、质量惯量、碰撞体、执行器和被动关节直接来自 task MJCF，不从示范重新拟合。训练仅在方法侧模型中设置独立物理步长，不修改封存 task。
 
 `prepared/` 包含完整 task 副本、方法 `reference.npz`、`binding.json`、`prepare_report.json` 和 `training_physics.json`。`ik/` 封存原始 MANO 特征、IK 模型、逐帧求解结果、来源、配方与环境版本；`ik/penetration.json` 记录整段碰撞诊断，包含物体之间的接触。初始化诊断失败不会移动物体或修改 IK，eval 仍独立执行初始化检查。准备输出不覆盖输入或已有目录，失败时清理本次未完成输出。
 
@@ -48,14 +48,14 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 ```bash
 CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.train \
   --prepared /path/to/prepared --output /path/to/new-training \
-  --num-envs 64 --iterations 100000 --seed 0
+  --num-envs 4096 --iterations 100000 --seed 0
 
 CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.train \
   --prepared /path/to/prepared --output /path/to/new-resumed-training \
-  --num-envs 64 --iterations 1000 --seed 0 --resume /path/to/training/model_999.pt
+  --num-envs 4096 --iterations 1000 --seed 0 --resume /path/to/training/model_999.pt
 ```
 
-训练使用 task 的物理和控制周期（默认 240／30 Hz）。共同 Sharpa 每手 6 腕＋22 手指，原生 58 维双臂 checkpoint 不能复用。策略仍观察当前状态、实际接触、当前＋5 个未来控制时刻参考、参考接触和 phase。位置线性插值，四元数最短弧 nlerp，接触最近邻；最后不足一个策略区间时保留 task 的准确终点。
+训练使用独立于 task 的原生时钟：默认 120 Hz 物理、60 Hz 控制，4,096 个环境；可通过 `--physics-hz`、`--control-hz`、`--num-envs` 显式配置。MJLab 负责物理步进、CUDA graph、manager 调度与批量 reset，使用官方 `RslRlVecEnvWrapper` 对接 ConTrack 原 PPO/CMDP runner；不维护自写 VecEnv。共同 Sharpa 每手 6 腕＋22 手指，原生 58 维双臂 checkpoint 不能复用。策略仍观察当前状态、实际接触、当前＋5 个未来控制时刻参考、参考接触和 phase。位置线性插值，四元数最短弧 nlerp，接触最近邻；完整任务时长必须能被训练控制周期整除，否则拒绝启动；不延长或裁短任务。
 
 腕平移／旋转／手指残差尺度分别为 0.01 m、0.01 rad、0.25 rad。原 arm 跟踪与惩罚项改用完整六维腕，平移／旋转的归一化尺度显式保存在 layout，默认分别为 1 m／1 rad。奖励延续原 manager 的 action-time 参考：动作施加后的状态与该动作对应的参考比较，再推进下一观测时间。终止时不多执行一个 endpoint 动作。实际接触点使用最后求解时的物体局部接触中点均值；这是从 PhysX sensor 到 MuJoCo manifold 的接触表示适配。
 
@@ -63,9 +63,11 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.train \
 
 原 PPO 只作一处边界修复：rollout 更新前尚无 episode 结束时，保持初始 CMDP 权重，不对空 return 窗口求均值；有真实 episode return 后继续原更新公式。
 
-GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512、约束容量 4096，可通过 `--contacts-per-world`／`--constraints-per-world` 显式增大，溢出直接报错。状态／奖励主要在 GPU；当前实现优先保证可核对性，没有 CUDA graph 或吞吐优化支持声明。
+GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512、约束容量 4096，可通过 `--contacts-per-world`／`--constraints-per-world` 显式增大，溢出直接报错。MJLab 原生捕获 step／forward／reset 的 CUDA graph。每个物理子步通过 metrics term 在 GPU 累积容量溢出标志，控制步结束统一检查；真实接触统计和奖励留在任务层。
 
-每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。
+训练与评估物理频率可以不同。评估 task 的控制周期须与 checkpoint 的策略周期一致，例如 240 Hz 评估物理配合 60 Hz 控制；客户端拒绝静默改变策略频率。未来参考间隔来自 checkpoint 的训练时钟，源轨迹与计分时间仍由共同 task 决定。
+
+每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训核验环境、训练频率和并行规模，恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。
 
 ## 独立统一评估
 
@@ -86,7 +88,7 @@ GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512�
 | `inputs.py`、`layout.py` | 输入身份、封存资源、具名布局 |
 | `prepare.py`、`retarget.py`、`contacts.py` | 准备编排、隔离 IK 调用、穿透诊断、ConTrack 接触参考 |
 | `mano_features.py`、`ik_worker.py`、`_vendor/v2d/` | 原始 MANO／IK 及输入、模型、具名关节边界转换 |
-| `mjwarp_scene.py`、`mjwarp_env.py` | 共同 MJCF、GPU 批量物理、VecEnv、真实接触 |
+| `mjwarp_scene.py`、`mjlab_env.py` | 共同 MJCF 核验、MJLab 场景和任务 terms、真实接触；批量仿真与 VecEnv 由 MJLab 提供 |
 | `rewards.py`、`resets.py` | 原生奖励公式、自适应库和课程 |
 | `reference.py` | 训练／推理共享的时间、特征和动作解码 |
 | `train.py` | 原 runner 的新入口与 checkpoint 上下文 |
@@ -98,6 +100,6 @@ CONTRACK_TEST_GPU=1 CUDA_VISIBLE_DEVICES=0 \
   /opt/h2r/contrack/bin/python -m pytest tests/h2r -q
 ```
 
-测试包含原生奖励 callback 数值对照、参考终点与四元数符号、输入篡改、协议分包、真实接触、body 原点速度、mask reset、PPO／CMDP 续训和完整控制输出一致性。GPU 测试需显式启用。短训练与闭环检查验证接入正确性，不证明论文性能或任务成功；实际任务结果与已验证组合保留在对应运行目录。
+测试包含原生奖励 callback 数值对照、参考终点与四元数符号、输入篡改、协议分包、真实接触、body 原点速度、mask reset、MJLab graph／eager 数值对照、训练／评估时钟分离、子步容量溢出、PPO／CMDP 续训和完整控制输出一致性。GPU 测试需显式启用。短训练与闭环检查验证接入正确性，不证明论文性能或任务成功；实际任务结果与已验证组合保留在对应运行目录。
 
 IK 测试还检查固定源码、世界坐标转换和只读穿透诊断。提供独立原 FlashCHORD 与 ConTrack 完整 ARCTIC 准备产物时，设置 `CONTRACK_IK_PARITY_ROOT=/path/to/check-directory` 启用全帧特征、关节解、时间轴和迭代次数对照；目录要求见 `tests/h2r/test_flashchord_ik.py`。单纯使用同一 solver 包不构成配方等价验证。
