@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
+from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
+
 
 def digest(path):
     with Path(path).open('rb') as stream:
@@ -146,7 +148,9 @@ def seal_prepared(root, binding):
 def load_prepared(root):
     root = Path(root).resolve()
     binding = read_json(root / 'binding.json')
-    if (binding['format'] != 'contrack-h2r-v1' or binding['prepared_id'] !=
+    if binding['format'] != 'contrack-h2r-v2' or binding.get('reference_recipe') != RECIPE_ID:
+        raise ValueError('Legacy or unsupported preparation; rerun prepare for the native H2R recipe')
+    if (binding['prepared_id'] !=
             identity({k: v for k, v in binding.items() if k != 'prepared_id'})):
         raise ValueError('Unsupported or changed ConTrack preparation')
     check_files(root, binding['files'])

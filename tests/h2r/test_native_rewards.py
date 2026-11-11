@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 
 import torch
+import pytest
 
 from contrack_h2r.rewards import reward_groups
 
@@ -66,7 +67,7 @@ def test_native_reward_equations_and_dt():
         torch.testing.assert_close(out[key], expected/30, atol=1e-6, rtol=1e-5)
 
 
-def test_ppo_before_first_completed_episode():
+def test_ppo_preserves_native_empty_return_failure():
     from tensordict import TensorDict
     from rsl_rl_contrack.algorithms import PPO
     from rsl_rl_contrack.modules import ActorCritic
@@ -82,7 +83,7 @@ def test_ppo_before_first_completed_episode():
             algorithm.process_env_step(obs, torch.ones(4), torch.zeros(4, dtype=torch.bool),
                                        {'rg': torch.ones(4), 'rs': torch.ones(4), 'rp': torch.zeros(4)})
         algorithm.compute_returns(obs)
-    losses = algorithm.update()
+    with pytest.raises(ZeroDivisionError):
+        algorithm.update()
     assert not algorithm.vg_buffer and not algorithm.vg_hat_buffer
     assert algorithm.lambda_raw.item() == 0
-    assert all(torch.isfinite(torch.tensor(v)) for v in losses.values())

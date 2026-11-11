@@ -3,6 +3,8 @@ import numpy as np
 import pytest
 
 from contrack_h2r.inputs import seal_prepared, write_json
+from contrack_h2r.reset_reference import reset_reference
+from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
 
 
 @pytest.fixture
@@ -37,9 +39,11 @@ def prepared(tmp_path):
     d = mujoco.MjData(m)
     mujoco.mj_forward(m, d)
     bids = [m.body(n).id for n in layout['part_bodies']]
-    np.savez(root / 'reference.npz', time_s=np.arange(4)/30, robot_q=np.zeros((4, 3)),
+    arrays = dict(time_s=np.arange(4)/30, robot_q=np.zeros((4, 3)),
              part_pos=np.tile(d.xpos[bids], (4, 1, 1)), part_quat=np.tile(d.xquat[bids], (4, 1, 1)),
              contact=np.zeros((4, 1, 2, 10), bool), contact_points=np.zeros((4, 1, 2, 10, 3)),
-             qpos=np.tile(m.qpos0, (4, 1)), qvel=np.zeros((4, m.nv)))
-    seal_prepared(root, dict(format='contrack-h2r-v1', task=task, layout=layout))
+             qpos=np.tile(m.qpos0, (4, 1)))
+    qpos, qvel, _ = reset_reference(m, layout, arrays)
+    np.savez(root / 'reference.npz', **arrays, reset_qpos=qpos, reset_qvel=qvel)
+    seal_prepared(root, dict(format='contrack-h2r-v2', reference_recipe=RECIPE_ID, task=task, layout=layout))
     return root

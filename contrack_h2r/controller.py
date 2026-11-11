@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from rsl_rl_contrack.modules import ActorCritic
+from rsl_rl_contrack.sharpa_recipe import PROVENANCE
 
 from .inputs import digest, load_prepared, read_json
 from .reference import Reference
@@ -19,6 +20,8 @@ class Controller:
             raise ValueError('Checkpoint checksum changed')
         saved = torch.load(checkpoint, map_location=device, weights_only=False)
         metadata = saved['infos']['h2r']
+        if metadata.get('format') != 'contrack-h2r-deployment-v2' or metadata.get('recipe') != PROVENANCE:
+            raise ValueError('Legacy or unsupported checkpoint; retrain for the native H2R recipe')
         physics = metadata['training_physics']
         control_dt = physics.get('control_ticks', self.task['control_ticks']) * physics['timestep_s']
         self.reference = Reference(self.binding, arrays, device, control_dt)

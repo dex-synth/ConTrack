@@ -7,6 +7,8 @@ import h5py
 import numpy as np
 import torch
 
+from rsl_rl_contrack.mimic import angular_velocity, linear_velocity, resample_reference, sample_start_frames
+
 from isaaclab.assets import Articulation
 from isaaclab.sim.utils import get_current_stage
 from pxr import Sdf, Usd, UsdPhysics
@@ -289,26 +291,13 @@ def prepare_reference_state(env, env_ids):
     if hasattr(env, "ref_hands"):
         return
     ref = reference_tensors(env.device, env.cfg.reference_path)
-    raw_len = int(ref["qpos"].shape[0])
-    raw_fps = float(torch.max(ref["fps"]).item())
     action_fps = 1.0 / (float(env.cfg.sim.dt) * float(env.cfg.decimation))
-    action_len = int((raw_len - 1) * action_fps / raw_fps) + 1
-    t = torch.arange(action_len, device=env.device, dtype=torch.float32) * (
-        raw_fps / action_fps
-    )
-    i0 = t.to(torch.long)
-    i1 = torch.clamp(i0 + 1, max=raw_len - 1)
-    w = (t - i0.to(torch.float32)).view(-1, 1, 1)
-    env.ref_qpos = ref["qpos"][i0] * (1.0 - w) + ref["qpos"][i1] * w
-    env.ref_object_pos = ref["object_pos"][i0] * (1.0 - w) + ref["object_pos"][i1] * w
-    q0 = ref["object_quat_wxyz"][i0]
-    q1 = ref["object_quat_wxyz"][i1]
-    q1 = torch.where((q0 * q1).sum(dim=-1, keepdim=True) < 0.0, -q1, q1)
-    q = q0 * (1.0 - w) + q1 * w
-    env.ref_object_quat = q / torch.norm(q, dim=-1, keepdim=True).clamp(min=1e-8)
-    nn = torch.clamp((t + 0.5).to(torch.long), max=raw_len - 1)
-    env.ref_hand_is_contact = ref["hand_is_contact"][nn].to(torch.bool)
-    env.ref_hand_contact_points = ref["hand_contact_points"][nn]
+    sampled = resample_reference(ref, action_fps)
+    env.ref_qpos = sampled["qpos"]
+    env.ref_object_pos = sampled["object_pos"]
+    env.ref_object_quat = sampled["object_quat_wxyz"]
+    env.ref_hand_is_contact = sampled["hand_is_contact"]
+    env.ref_hand_contact_points = sampled["hand_contact_points"]
     env.urdf_name = ref["urdf_name"]
     env.is_rhand = ref["is_rhand"].to(torch.bool)
     env.num_objects = int(env.ref_object_pos.shape[1])
@@ -319,45 +308,12 @@ def prepare_reference_state(env, env_ids):
     h = int(env.ref_qpos.shape[1])
     fps = float(env.ref_fps)
     hand_qpos = env.ref_qpos
-    hand_qvel = torch.zeros_like(hand_qpos)
-    hand_qvel[1:-1] = 0.5 * (hand_qpos[2:] - hand_qpos[:-2]) * fps
-    hand_qvel[0] = (hand_qpos[1] - hand_qpos[0]) * fps
-    hand_qvel[-1] = (hand_qpos[-1] - hand_qpos[-2]) * fps
+    hand_qvel = linear_velocity(hand_qpos, fps)
     hand_state = torch.cat([hand_qpos, hand_qvel], dim=-1).view(env.ref_len, -1)
 
     obj_pos = env.ref_object_pos
-    obj_lin_vel = torch.zeros_like(obj_pos)
-    obj_lin_vel[1:-1] = 0.5 * (obj_pos[2:] - obj_pos[:-2]) * fps
-    obj_lin_vel[0] = (obj_pos[1] - obj_pos[0]) * fps
-    obj_lin_vel[-1] = (obj_pos[-1] - obj_pos[-2]) * fps
-
-    q = env.ref_object_quat
-    q_prev = torch.empty_like(q)
-    q_next = torch.empty_like(q)
-    q_prev[0], q_next[0] = q[0], q[1]
-    q_prev[-1], q_next[-1] = q[-2], q[-1]
-    q_prev[1:-1], q_next[1:-1] = q[:-2], q[2:]
-    w0, x0, y0, z0 = q_prev.unbind(-1)
-    w1, x1, y1, z1 = q_next.unbind(-1)
-    rel = torch.stack(
-        [
-            w1 * w0 + x1 * x0 + y1 * y0 + z1 * z0,
-            -w1 * x0 + x1 * w0 - y1 * z0 + z1 * y0,
-            -w1 * y0 + x1 * z0 + y1 * w0 - z1 * x0,
-            -w1 * z0 - x1 * y0 + y1 * x0 + z1 * w0,
-        ],
-        dim=-1,
-    )
-    rel = torch.where(rel[..., :1] < 0.0, -rel, rel)
-    w = rel[..., 0]
-    v = rel[..., 1:]
-    s = torch.linalg.norm(v, dim=-1)
-    a = 2.0 * torch.atan2(s, w.clamp(min=1e-8))
-    rotvec = v * (a / s.clamp(min=1e-8)).unsqueeze(-1)
-    scale = torch.full((env.ref_len, 1, 1), 0.5 * fps, device=env.device)
-    scale[0] = fps
-    scale[-1] = fps
-    obj_ang_vel = rotvec * scale
+    obj_lin_vel = linear_velocity(obj_pos, fps)
+    obj_ang_vel = angular_velocity(env.ref_object_quat, fps)
 
     obj_state = torch.cat(
         [obj_pos, env.ref_object_quat, obj_lin_vel, obj_ang_vel], dim=-1
@@ -639,23 +595,9 @@ def reset_reference_episode(env, env_ids):
         env.reset_lib_state[frames] = env.episode_states[env_rep, offs_rep]
         env.reset_lib_track_len_best[frames] = len_rep_f
 
-    l = env.reset_lib_track_len[: env.ref_len - 1]
-    h = (env.ref_len - torch.arange(env.ref_len - 1, device=env.device)).to(
-        torch.float32
-    )
-    ratio = l / h
-    grad = torch.zeros_like(ratio)
-    grad[:-1] = ratio[1:] - ratio[:-1]
-    k = min(HARD_RESET_TOPK, int(grad.shape[0]))
-    worst = torch.topk(grad, k, largest=True).indices
-    if not (worst == 0).any().item():
-        worst[-1] = 0
-    start = torch.multinomial(torch.softmax(-ratio / TAU, dim=0), n, replacement=True)
-    hard = torch.rand((n,), device=env.device) < EPSILON_GREEDY
-    start[hard] = torch.clamp(
-        worst[torch.randint(0, k, (int(hard.sum().item()),), device=env.device)]
-        - DELTA,
-        min=0,
+    start = sample_start_frames(
+        env.reset_lib_track_len, n, topk=HARD_RESET_TOPK, delta=DELTA,
+        epsilon=EPSILON_GREEDY, tau=TAU,
     )
 
     env.reset_lib_reset_index_count.add_(torch.bincount(start, minlength=env.ref_len))

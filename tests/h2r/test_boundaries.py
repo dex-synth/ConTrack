@@ -27,10 +27,10 @@ def test_reference_time_antipodes_contacts_and_endpoint(prepared):
     arrays['robot_q'][:, 0] = arrays['time_s']*2
     arrays['contact'][1, 0, 0, 0] = True
     ref = Reference(binding, arrays, 'cpu')
-    sample = ref.sample(torch.tensor([.025, .1, .2]))
-    torch.testing.assert_close(sample['robot_q'][:, 0], torch.tensor([.05, .2, .2]))
+    sample = ref.sample(torch.tensor([1/30, .1, .2]))
+    torch.testing.assert_close(sample['robot_q'][:, 0], torch.tensor([2/30, .2, .2]))
     assert sample['contact'][0, 0, 0, 0] == 1
-    torch.testing.assert_close(sample['part_quat'][..., 0], torch.ones(3, 2))
+    torch.testing.assert_close(sample['part_quat'][..., 0].abs(), torch.ones(3, 2))
     targets = ref.targets(torch.tensor([[2., -2., 1.]]), torch.tensor([.1]))
     torch.testing.assert_close(targets, torch.tensor([[.21, -.01, .25]]))
 

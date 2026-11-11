@@ -13,6 +13,8 @@ from .inputs import implementation_hashes, load_inputs, seal_prepared, write_jso
 from .layout import make_layout
 from .mjwarp_scene import Scene
 from .retarget import RECIPE, penetration_report, retarget
+from .reset_reference import reset_reference
+from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
 
 
 def prepare(bundle, robot, task, output, *, mano_root, loader_python, ik_python, contact_distance=0.008):
@@ -34,10 +36,10 @@ def prepare(bundle, robot, task, output, *, mano_root, loader_python, ik_python,
                                 mano_root=mano_root, loader_python=loader_python, ik_python=ik_python)
         print('Generating part-local skin contacts and penetration diagnostics...', flush=True)
         contact, points = reference_contacts(scene, arrays, contact_distance)
-        qvel = np.empty((len(qpos), scene.model.nv))
-        for i in range(len(qpos)-1):
-            mujoco.mj_differentiatePos(scene.model, qvel[i], arrays['time_s'][i+1]-arrays['time_s'][i], qpos[i], qpos[i+1])
-        qvel[-1] = qvel[-2]
+        reference_arrays = dict(time_s=arrays['time_s'], robot_q=qpos[:, scene.qids], qpos=qpos,
+                                part_pos=arrays['part_pos_m'], part_quat=arrays['part_quat_wxyz'],
+                                contact=contact, contact_points=points)
+        reset_qpos, reset_qvel, reset_report = reset_reference(scene.model, layout, reference_arrays)
         write_json(output / 'ik/penetration.json', penetration_report(scene, qpos))
         data = mujoco.MjData(scene.model)
         data.qpos[:] = qpos[0]
@@ -45,19 +47,17 @@ def prepare(bundle, robot, task, output, *, mano_root, loader_python, ik_python,
         collisions = [{'geom1': scene.model.geom(c.geom1).name, 'geom2': scene.model.geom(c.geom2).name,
                        'depth_m': float(-c.dist)} for c in data.contact if -c.dist > spec['initialization']['max_penetration_m']]
         shutil.copytree(task, output / 'task')
-        np.savez_compressed(output / 'reference.npz', time_s=arrays['time_s'],
-                            robot_q=qpos[:, scene.qids], qpos=qpos, qvel=qvel,
-                            part_pos=arrays['part_pos_m'], part_quat=arrays['part_quat_wxyz'],
-                            contact=contact, contact_points=points)
+        np.savez_compressed(output / 'reference.npz', **reference_arrays,
+                            reset_qpos=reset_qpos, reset_qvel=reset_qvel)
         write_json(output / 'prepare_report.json', {'recipe': RECIPE['name'],
-                   'ik': errors, 'object_fk_max_error_m': fk_error,
+                   'ik': errors, 'reset_reference': reset_report, 'object_fk_max_error_m': fk_error,
                    'initialization_accepted': not collisions, 'initial_collisions': collisions,
                    'contact_positive_slots': int(contact.sum()),
                    'contact_recipe': 'nearest MANO bone skin segmentation; mean surface points within threshold; 15-to-10 OR/mean'})
         write_json(output / 'training_physics.json', {'source': 'unmodified common task MJCF',
                    'mujoco_version': mujoco.__version__, 'compiled': scene.audit()})
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).resolve().parents[1], text=True).strip()
-        seal_prepared(output, dict(format='contrack-h2r-v1', source_revision=revision,
+        seal_prepared(output, dict(format='contrack-h2r-v2', reference_recipe=RECIPE_ID, source_revision=revision,
                       implementation_sha256=implementation_hashes(),
                       bundle_id=manifest['bundle_id'], scene_id=manifest['scene_id'],
                       robot_manifest_sha256=spec['robot_manifest_sha256'], task=spec, layout=layout,

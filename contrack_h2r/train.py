@@ -4,33 +4,33 @@ import argparse
 from copy import deepcopy
 from pathlib import Path
 import random
+import time
 
 import numpy as np
 import torch
 
 from rsl_rl_contrack.runners import OnPolicyRunner
+from rsl_rl_contrack.sharpa_recipe import (
+    ALGORITHM, CONTROL_HZ, MAX_ITERATIONS, NUM_ENVS, NUM_STEPS_PER_ENV,
+    PHYSICS_HZ, POLICY, PROVENANCE, SAVE_INTERVAL,
+)
 
 from .inputs import digest, implementation_hashes, write_json
 from .mjlab_env import make_env
 
 
 def training_config():
-    return dict(num_steps_per_env=16, save_interval=1000, logger='tensorboard',
+    return dict(num_steps_per_env=NUM_STEPS_PER_ENV, save_interval=SAVE_INTERVAL, logger='tensorboard',
                 obs_groups={'policy': ['policy'], 'critic': ['critic']},
-                policy=dict(class_name='ActorCritic', init_noise_std=1.0,
-                            actor_obs_normalization=True, critic_obs_normalization=True,
-                            actor_hidden_dims=[256, 256, 128], critic_hidden_dims=[256, 256, 128], activation='elu'),
-                algorithm=dict(class_name='PPO', value_loss_coef=1.0, use_clipped_value_loss=True,
-                               clip_param=0.2, entropy_coef=0.001, num_learning_epochs=10, num_mini_batches=16,
-                               learning_rate=0.0005, schedule='adaptive', gamma=0.99, lam=0.95,
-                               desired_kl=0.01, max_grad_norm=1.0, cmdp_alpha=0.9, cmdp_lambda_lr=0.05,
-                               cmdp_warmup_iters=0, cmdp_vg_window=100, cmdp_vg_star_window=20, cmdp_lambda_init=0.0))
+                policy=dict(class_name='ActorCritic', **deepcopy(POLICY)),
+                algorithm=dict(class_name='PPO', **deepcopy(ALGORITHM)))
 
 
 class H2RRunner(OnPolicyRunner):
     def __init__(self, env, cfg, output, seed):
         self.task = env.unwrapped.task_state
-        self.deployment = dict(format='contrack-h2r-deployment-v1', prepared_id=self.task.binding['prepared_id'],
+        self.deployment = dict(format='contrack-h2r-deployment-v2', recipe=PROVENANCE,
+                               prepared_id=self.task.binding['prepared_id'],
                                layout=self.task.layout, task_id=self.task.binding['task']['task_id'],
                                train_config=deepcopy(cfg), seed=seed, training_physics=self.task.audit,
                                implementation_sha256=implementation_hashes())
@@ -48,8 +48,8 @@ class H2RRunner(OnPolicyRunner):
         # User-provided local checkpoints are trusted pickle inputs, never fetched automatically.
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         metadata = checkpoint['infos']['h2r']
-        for key in ('prepared_id', 'layout', 'train_config'):
-            if metadata[key] != self.deployment[key]:
+        for key in ('format', 'recipe', 'prepared_id', 'layout', 'train_config'):
+            if metadata.get(key) != self.deployment[key]:
                 raise ValueError(f'Checkpoint differs from this training task: {key}')
         for key in ('environment', 'timestep_s', 'control_ticks', 'num_envs'):
             if metadata['training_physics'].get(key) != self.task.audit[key]:
@@ -72,37 +72,73 @@ class H2RRunner(OnPolicyRunner):
         self.task.it_step_count = 0
 
 
-def main():
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prepared', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--iterations', type=int, default=100000)
-    parser.add_argument('--num-envs', type=int, default=4096)
-    parser.add_argument('--physics-hz', type=float, default=120.0)
-    parser.add_argument('--control-hz', type=float, default=60.0)
+    parser.add_argument('--iterations', type=int, default=MAX_ITERATIONS)
+    parser.add_argument('--num-envs', type=int, default=NUM_ENVS)
+    parser.add_argument('--physics-hz', type=float, default=PHYSICS_HZ)
+    parser.add_argument('--control-hz', type=float, default=CONTROL_HZ, choices=[CONTROL_HZ])
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--resume', type=Path)
     parser.add_argument('--contacts-per-world', type=int, default=512)
     parser.add_argument('--constraints-per-world', type=int, default=4096)
+    return parser
+
+
+def main():
+    parser = argument_parser()
     args = parser.parse_args()
-    if args.iterations < 1:
-        parser.error('--iterations must be positive')
+    if args.iterations < 1 or args.num_envs < 1:
+        parser.error('--iterations and --num-envs must be positive')
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.set_num_threads(1)
+    # Match the selected native training entry's numerical settings.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = False
+    args.output.mkdir(parents=True, exist_ok=False)
+    started = time.perf_counter()
     env = make_env(args.prepared, args.num_envs, args.device, args.contacts_per_world, args.constraints_per_world,
                    physics_hz=args.physics_hz, control_hz=args.control_hz, seed=args.seed)
-    args.output.mkdir(parents=True, exist_ok=False)
+    environment_s = time.perf_counter() - started
     runner = H2RRunner(env, training_config(), args.output, args.seed)
     if args.resume:
         runner.resume(args.resume)
     write_json(args.output / 'training_physics.json', runner.task.audit)
     write_json(args.output / 'deployment.json', runner.deployment)
-    runner.learn(args.iterations)
-    runner.writer.close()
-    env.close()
+    write_json(args.output / 'run_config.json', {
+        'recipe': PROVENANCE, 'arguments': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        'budget_override': args.iterations != MAX_ITERATIONS or args.num_envs != NUM_ENVS,
+        'transitions_per_update': args.num_envs * NUM_STEPS_PER_ENV,
+        'init_at_random_ep_len': True, 'logger_override': 'tensorboard',
+    })
+    initialization_s = time.perf_counter() - started
+    started = time.perf_counter()
+    completed = False
+    try:
+        runner.learn(args.iterations, init_at_random_ep_len=True)
+        completed = True
+    finally:
+        torch.cuda.synchronize(env.device)
+        write_json(args.output / 'timing.json', {
+            'environment_initialization_s': environment_s, 'initialization_s': initialization_s,
+            'training_s': time.perf_counter() - started, 'completed': completed,
+            'completed_updates': args.iterations if completed else None,
+            'optimizer_update_attempts': runner.alg.num_updates,
+            'control_steps_per_world': env.unwrapped.common_step_counter,
+            'physics_steps_per_world': env.unwrapped._sim_step_counter,
+            'control_updates_per_task_second': 1 / env.unwrapped.step_dt,
+            'physics_steps_per_task_second': 1 / env.unwrapped.physics_dt,
+        })
+        if runner.writer is not None:
+            runner.writer.close()
+        env.close()
 
 
 if __name__ == '__main__':

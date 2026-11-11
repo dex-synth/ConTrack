@@ -22,6 +22,8 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 
+from rsl_rl_contrack.sharpa_recipe import CONTROL_HZ, NUM_ENVS, PHYSICS_HZ, PROVENANCE
+
 from .inputs import load_prepared
 from .mjwarp_scene import Scene
 from .reference import Reference
@@ -59,7 +61,9 @@ class TaskState:
                           cone=int(m.opt.cone), impratio=m.opt.impratio,
                           contacts_per_world=env.cfg.sim.nconmax, constraints_per_world=env.cfg.sim.njmax,
                           prepared_id=binding['prepared_id'], use_cuda_graph=env.sim.use_cuda_graph,
-                          training_randomization='disabled (native default)')
+                          training_randomization='disabled (native default)', recipe=PROVENANCE,
+                          benchmark_duration_s=task['dt_s'] * task['end_tick'],
+                          declared_episode_length_s=env.cfg.episode_length_s)
         self.reference = Reference(binding, arrays, self.device, self.step_dt)
         self.qids = torch.as_tensor(self.scene.qids, device=self.device)
         self.vids = torch.as_tensor(self.scene.vids, device=self.device)
@@ -70,10 +74,13 @@ class TaskState:
         self.body_slots = torch.as_tensor(self.scene.body_slots, device=self.device)
         self.body_parts = torch.as_tensor(self.scene.body_parts, device=self.device)
         self.max_episode_length = env.max_episode_length
-        self.clock = torch.arange(self.max_episode_length + 1, device=self.device) * self.step_dt
-        self.clock[-1] = task['end_tick'] * task['dt_s']
+        self.clock = self.reference.time
+        self.audit['training_actions_from_first_frame'] = len(self.clock)
         self.frame = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        qpos, qvel = self._reset_reference(arrays)
+        qpos = torch.as_tensor(arrays['reset_qpos'], device=self.device, dtype=torch.float32)
+        qvel = torch.as_tensor(arrays['reset_qvel'], device=self.device, dtype=torch.float32)
+        if qpos.shape != (len(self.clock), m.nq) or qvel.shape != (len(self.clock), m.nv):
+            raise ValueError('Reset reference does not match the native control grid or common model')
         self.library = ResetLibrary(qpos, qvel, self.num_envs)
         self.pending_reset = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         self.capacity_overflow = torch.zeros_like(self.pending_reset)
@@ -116,22 +123,22 @@ class TaskState:
         if not all(torch.isfinite(v).all() for v in self.state.values()):
             raise RuntimeError('Nonfinite training state')
         ref = self.reference.sample(self.clock[self.frame])
-        groups, velocity = reward_groups(self.state, self.previous_velocity, ref, self.layout, self.step_dt)
-        for previous, current in zip(self.previous_velocity, velocity):
-            previous.copy_(current)
+        groups, _ = reward_groups(self.state, self.previous_velocity, ref, self.layout, self.step_dt)
+        # Preserve f5efe18: its prev_*[env_ids].copy_ updates a temporary tensor.
+        # Previous velocities therefore change only at reset, not after a step.
         self.env.extras.update(groups)
-        self.frame += 1
         position, angle = pose_error(self.state, ref)
         self.it_obj_pos_err_sum += position.mean()
         self.it_obj_rot_err_sum += angle.mean()
         self.it_step_count += 1
         pt, rt = self.library.thresholds()
         self.failed = ((position > pt) | (angle > rt)).any(-1)
-        self.timeout = (self.frame >= self.max_episode_length) & ~self.failed
+        self.timeout = self.frame >= len(self.clock) - 1
         state = torch.cat((self.tensor(self.data, 'qpos'), self.tensor(self.data, 'qvel')), -1)
         self.library.record(self.frame, state)
         ids = (self.failed | self.timeout).nonzero().flatten()
         self.library.finish(ids, self.frame[ids])
+        self.frame[~(self.failed | self.timeout)] += 1
         self.env.extras['log'].update({'Tracking/position_m': position.mean(), 'Tracking/angle_rad': angle.mean(),
                                       'Curriculum/success_ema': self.library.success_ema.clone()})
 
@@ -143,27 +150,6 @@ class TaskState:
         self.tensor(self.data, 'ctrl')[ids[:, None], self.aids] = state[:, self.qids]
         self.frame[ids] = start
         self.pending_reset[ids] = True
-
-    def _reset_reference(self, arrays):
-        source = self.reference.time
-        hi = torch.searchsorted(source, self.clock, right=True).clamp(1, len(source)-1)
-        lo = hi-1
-        weight = ((self.clock-source[lo])/(source[hi]-source[lo]))[:, None]
-        q = torch.as_tensor(arrays['qpos'], device=self.device, dtype=torch.float32)
-        a, b = q[lo], q[hi].clone()
-        for j, kind in enumerate(self.cpu_model.jnt_type):
-            if kind == mujoco.mjtJoint.mjJNT_FREE:
-                address = self.cpu_model.jnt_qposadr[j]+3
-                section = slice(address, address+4)
-                b[:, section] = torch.where((a[:, section]*b[:, section]).sum(-1, keepdim=True)<0,
-                                             -b[:, section], b[:, section])
-        result = a+weight*(b-a)
-        for j, kind in enumerate(self.cpu_model.jnt_type):
-            if kind == mujoco.mjtJoint.mjJNT_FREE:
-                address = self.cpu_model.jnt_qposadr[j]+3
-                result[:, address:address+4] = torch.nn.functional.normalize(result[:, address:address+4], dim=-1)
-        v = torch.as_tensor(arrays['qvel'], device=self.device, dtype=torch.float32)
-        return result, v[lo]+weight*(v[hi]-v[lo])
 
     def _check_capacity(self, data):
         if ((self.tensor(data, 'nacon')[0] > data.naconmax)
@@ -278,13 +264,15 @@ def capacity_health(env):
 class ConTrackEnv(ManagerBasedRlEnv):
     """MJLab environment with ConTrack task terms; inherits its step and reset unchanged."""
 
-    def __init__(self, prepared, num_envs=4096, device='cuda:0', contacts_per_world=512,
-                 constraints_per_world=4096, *, physics_hz=120.0, control_hz=60.0, seed=0):
+    def __init__(self, prepared, num_envs=NUM_ENVS, device='cuda:0', contacts_per_world=512,
+                 constraints_per_world=4096, *, physics_hz=PHYSICS_HZ, control_hz=CONTROL_HZ, seed=0):
         self.prepared = Path(prepared)
         self.binding, self.arrays = load_prepared(prepared)
         task = self.binding['task']
         if not np.isfinite([physics_hz, control_hz]).all() or min(physics_hz, control_hz) <= 0:
             raise ValueError('Training frequencies must be positive and finite')
+        if control_hz != CONTROL_HZ:
+            raise ValueError('The native Sharpa recipe requires 60 Hz policy control')
         duration = task['dt_s'] * task['end_tick']
         decimation = round(physics_hz / control_hz)
         if (decimation < 1 or not np.isclose(decimation / physics_hz, 1 / control_hz, atol=1e-12, rtol=0)
@@ -309,7 +297,11 @@ class ConTrackEnv(ManagerBasedRlEnv):
                             ccd_iterations=opt.ccd_iterations, gravity=tuple(opt.gravity))
         group = lambda: ObservationGroupCfg(terms={'features': ObservationTermCfg(func=observation)})
         cfg = ManagerBasedRlEnvCfg(
-            seed=seed, decimation=decimation, episode_length_s=duration,
+            # Native config uses raw_len/raw_fps for its declared episode length;
+            # the reference timeout separately includes the final action. Neither
+            # private training clock changes the benchmark end_tick.
+            seed=seed, decimation=decimation,
+            episode_length_s=duration + duration / (len(self.arrays['time_s']) - 1),
             scene=SceneCfg(num_envs=num_envs, env_spacing=0, spec_fn=attach_scene),
             sim=SimulationCfg(nconmax=contacts_per_world, njmax=constraints_per_world, mujoco=physics),
             observations={'policy': group(), 'critic': group()}, actions={'residual': ResidualActionCfg()},

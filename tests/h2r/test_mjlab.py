@@ -80,17 +80,23 @@ def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
                 for p, part in enumerate(layout['part_bodies']):
                     if state['contact'][i, hand, p, slot]:
                         records.append({'body1': part, 'body2': body})  # swap pair orientation
-            frames.append(dict(episode_id=str(i), tick=tick, time_s=tick*task['dt_s'], done=False,
+            done = tick >= task['end_tick'] or str(i) in controller.finished
+            frames.append(dict(episode_id=str(i), tick=tick, time_s=tick*task['dt_s'], done=done,
                                robot_q=state['robot_q'][i, order].tolist(), robot_dq=state['robot_dq'][i, order].tolist(),
                                bodies={b: torch.cat((state['part_pose'][i, p], state['part_velocity'][i, p])).tolist()
                                        for p, b in enumerate(layout['part_bodies'])},
                                contacts={'solve_tick': tick-1 if tick else None, 'records': records}))
         with torch.inference_mode():
             expected = env.reference.targets(runner.alg.policy.act_inference(wrapped.get_observations()), env.clock[env.frame])
-        result = controller.step({'type': 'frames', 'episodes': frames, 'done': False})
+        active = [i for i, frame in enumerate(frames) if not frame['done']]
+        result = controller.step({'type': 'frames', 'episodes': frames, 'done': not active})
+        if not active:
+            assert result is None  # The private terminal action must not reach bench.
+            break
+        assert set(result['commands']) == {str(i) for i in active}
         actual = torch.tensor([[result['commands'][str(i)]['joint_targets'][n] for n in layout['joint_names']]
-                               for i in range(2)], device=env.device)
-        torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
+                               for i in active], device=env.device)
+        torch.testing.assert_close(actual, expected[active], atol=1e-6, rtol=1e-5)
         wrapped.step(torch.zeros((2, 3), device=env.device))
     resume_dir = tmp_path / 'resume'
     resume_dir.mkdir()
@@ -103,6 +109,7 @@ def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
     resumed.learn(1)
     resumed.writer.close()
     assert (resume_dir / 'model_1.pt').exists()
+    wrapped.close()
 
 
 def test_incomplete_training_interval_is_rejected(prepared):
@@ -129,7 +136,8 @@ def test_native_clock_and_mjlab_graph_parity(prepared):
     assert task.substeps == 2 and task.reference.dt == 1/60
     assert task.binding['task']['dt_s'] == 1/240
     assert task.binding['task']['control_ticks'] == 8
-    assert graph.max_episode_length == 6
+    assert graph.max_episode_length == 8  # native raw_len/raw_fps declaration
+    assert len(task.clock) == 7  # including the private terminal reference action
     for i in range(8):
         action = torch.full((2, 3), .1, device=graph.device)
         torch.manual_seed(i)

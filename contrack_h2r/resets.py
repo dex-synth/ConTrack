@@ -2,6 +2,8 @@
 
 import torch
 
+from rsl_rl_contrack.mimic import sample_start_frames
+
 
 class ResetLibrary:
     def __init__(self, qpos, qvel, num_envs):
@@ -17,17 +19,7 @@ class ResetLibrary:
         self.terminate_count = torch.zeros_like(self.reset_count)
 
     def sample(self, ids):
-        horizon = self.length-torch.arange(self.length-1, device=self.device)
-        ratio = self.track[:-1]/horizon
-        gradient = torch.zeros_like(ratio)
-        gradient[:-1] = ratio[1:]-ratio[:-1]
-        worst = gradient.topk(min(64, len(gradient))).indices
-        if not (worst == 0).any():
-            worst[-1] = 0
-        start = torch.multinomial(torch.softmax(-ratio, 0), len(ids), replacement=True)
-        hard = torch.rand(len(ids), device=self.device) < 0.5
-        candidate = (worst[torch.randint(len(worst), (len(ids),), device=self.device)]-100).clamp(min=0)
-        start = torch.where(hard, candidate, start)
+        start = sample_start_frames(self.track, len(ids))
         self.reset_count += torch.bincount(start, minlength=self.length)
         self.start[ids] = start
         self.history[ids, start] = self.state[start]
