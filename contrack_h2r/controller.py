@@ -3,10 +3,8 @@
 import numpy as np
 import torch
 
-from rsl_rl_contrack.modules import ActorCritic
-from rsl_rl_contrack.sharpa_recipe import PROVENANCE
-
-from .inputs import digest, load_prepared, read_json
+from .inputs import load_prepared
+from .policy import Checkpoint
 from .reference import Reference
 
 
@@ -15,31 +13,14 @@ class Controller:
         self.binding, arrays = load_prepared(prepared)
         self.layout, self.task = self.binding['layout'], self.binding['task']
         self.device = device
-        manifest = read_json(checkpoint.with_suffix('.json'))
-        if manifest['checkpoint_sha256'] != digest(checkpoint):
-            raise ValueError('Checkpoint checksum changed')
-        saved = torch.load(checkpoint, map_location=device, weights_only=False)
-        metadata = saved['infos']['h2r']
-        if metadata.get('format') != 'contrack-h2r-deployment-v2' or metadata.get('recipe') != PROVENANCE:
-            raise ValueError('Legacy or unsupported checkpoint; retrain for the native H2R recipe')
-        physics = metadata['training_physics']
-        control_dt = physics.get('control_ticks', self.task['control_ticks']) * physics['timestep_s']
-        self.reference = Reference(self.binding, arrays, device, control_dt)
-        if (metadata['prepared_id'] != self.binding['prepared_id'] or metadata['layout'] != self.layout
-                or metadata != {k: v for k, v in manifest.items() if k != 'checkpoint_sha256'}):
-            raise ValueError('Checkpoint does not match preparation/deployment metadata')
+        self.checkpoint = Checkpoint(checkpoint, self.binding, device)
+        self.reference = Reference(self.binding, arrays, device, self.checkpoint.control_dt)
         # Shapes are determined by the common feature function; no physical world is created.
         h, p, n = len(self.layout['hands']), len(self.layout['parts']), len(self.layout['joint_names'])
         zero = lambda *shape: torch.zeros(shape, device=device)
         dummy = dict(robot_q=zero(1, n), robot_dq=zero(1, n), part_pose=zero(1, p, 7),
                      part_velocity=zero(1, p, 6), contact=zero(1, h, p, 10))
-        cfg = dict(metadata['train_config']['policy'])
-        if cfg.pop('class_name') != 'ActorCritic':
-            raise ValueError('Only the verified nonrecurrent ConTrack policy is supported')
-        self.policy = ActorCritic(self.reference.observations(dummy, zero(1)),
-                                 metadata['train_config']['obs_groups'], n, **cfg).to(device).eval()
-        self.policy.load_state_dict(saved['model_state_dict'])
-        self.checkpoint_hash = manifest['checkpoint_sha256']
+        self.policy = self.checkpoint.policy(self.reference.observations(dummy, zero(1)))
         self.initial = dict(zip(self.layout['joint_names'], arrays['robot_q'][0].tolist()))
         self.next_tick = {}
         self.finished = set()
@@ -70,7 +51,7 @@ class Controller:
             raise ValueError('Invalid episode IDs')
         return dict(type='start', task_id=hello['task_id'],
                     binding=dict(bundle_id=hello['bundle_id'], robot_manifest_sha256=hello['robot_manifest_sha256'],
-                                 method='ConTrack-H2R', controller={'checkpoint_sha256': self.checkpoint_hash,
+                                 method='ConTrack-H2R', controller={**self.checkpoint.identity(),
                                                                'prepared_id': self.binding['prepared_id']}),
                     requirements=dict(bodies=self.layout['part_bodies'], contacts=True,
                                       control_dt_s=self.reference.dt),

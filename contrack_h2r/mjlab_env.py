@@ -34,6 +34,11 @@ from .rewards import pose_error, reward_groups, velocity_groups
 class TaskState:
     """Method reference, reward and adaptive-reset state; no simulation step loop."""
 
+    # Deterministic diagnostics set {'start': frame, 'velocity': 'reference'|'zero'};
+    # training keeps None, i.e. adaptive start sampling and library updates.
+    rollout = None
+    last_step = None
+
     def __init__(self, env, prepared, binding, arrays):
         self.env, self.binding = env, binding
         self.layout, task = binding['layout'], binding['task']
@@ -143,9 +148,15 @@ class TaskState:
         self.failed = ((position > pt) | (angle > rt)).any(-1)
         self.timeout = self.frame >= len(self.clock) - 1
         state = torch.cat((self.tensor(self.data, 'qpos'), self.tensor(self.data, 'qvel')), -1)
-        self.library.record(self.frame, state)
-        ids = (self.failed | self.timeout).nonzero().flatten()
-        self.library.finish(ids, self.frame[ids])
+        if self.rollout is None:
+            self.library.record(self.frame, state)
+            ids = (self.failed | self.timeout).nonzero().flatten()
+            self.library.finish(ids, self.frame[ids])
+        else:
+            # Frozen library and thresholds; keep the scored step before auto-reset.
+            self.last_step = dict(frame=self.frame.clone(), position=position, angle=angle,
+                                  failed=self.failed.clone(), timeout=self.timeout.clone(),
+                                  robot_q=self.state['robot_q'].clone(), part_pose=self.state['part_pose'].clone())
         self.frame[~(self.failed | self.timeout)] += 1
         self.env.extras['log'].update({'Tracking/position_m': position.mean(), 'Tracking/angle_rad': angle.mean(),
                                       'Curriculum/success_ema': self.library.success_ema.clone()})
@@ -165,7 +176,13 @@ class TaskState:
                 self._kinematic_kernels()
 
     def reset_reference(self, ids):
-        start, state = self.library.sample(ids)
+        if self.rollout is None:
+            start, state = self.library.sample(ids)
+        else:
+            start = torch.full_like(ids, self.rollout['start'])
+            state = self.library.state[start].clone()
+            if self.rollout['velocity'] == 'zero':
+                state[:, self.cpu_model.nq:] = 0
         nq = self.cpu_model.nq
         self.tensor(self.data, 'qpos')[ids] = state[:, :nq]
         self.tensor(self.data, 'qvel')[ids] = state[:, nq:]

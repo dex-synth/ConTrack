@@ -94,7 +94,19 @@ GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512�
   --socket /path/to/shared/eval.sock --device cpu
 ```
 
-客户端校验 task、robot、时钟、观测 schema 和 checkpoint，只使用 bench 的实际关节、body 原点世界速度及 contact records。`contacts=null` 是错误，有效空列表是无接触。actor 的 normalizer 和 `tanh` 由原 `ActorCritic.act_inference()` 执行；共享解码输出所有具名关节位置目标。部署不启动物理 solver，不提交物体状态、reset、外力或方法终止条件。
+客户端校验 task、robot、时钟、观测 schema 和 checkpoint，只使用 bench 的实际关节、body 原点世界速度及 contact records。start binding 的方法身份为 `ConTrack-H2R`，`controller` 记录 checkpoint 路径、sha256、完成更新数（`model_N` 为 `N+1`）和 `prepared_id`；bench 的评估清单须以同一身份声明。`contacts=null` 是错误，有效空列表是无接触。actor 的 normalizer 和 `tanh` 由原 `ActorCritic.act_inference()` 执行；共享解码输出所有具名关节位置目标。部署不启动物理 solver，不提交物体状态、reset、外力或方法终止条件。
+
+## 原生闭环诊断
+
+`contrack_h2r.native_rollout` 在训练 setup 中确定性回放一个 checkpoint，只反映训练效果：使用 checkpoint 记录的 MJLab／MJWarp 物理与 60 Hz 控制、原生观测和 `act_inference`；所有 world 从参考首帧开始，reset library 与 pose-break 阈值从 checkpoint 载入后冻结，不更新课程。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.native_rollout \
+  --prepared /path/to/prepared --checkpoint /path/to/training/model_N.pt \
+  --output /path/to/new-native-rollout --num-envs 4 --initial-velocity reference
+```
+
+`--initial-velocity reference` 使用训练 reset 的首帧参考速度，`zero` 对应 bench 的零初速。`summary.json` 记录各 world 的终止帧／原因、参考覆盖率和物体位置／角度误差，`rollout.npz` 保存逐控制步记录。GPU 接触求解不完全确定，多 world 会分叉，故分别报告。该诊断不替代 bench 的共同评估。
 
 ## 代码与验证
 
@@ -108,7 +120,9 @@ GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512�
 | `reference.py`、`reset_reference.py` | 控制网格参考、原生差分到共同广义状态的转换，以及训练／推理共用特征和解码 |
 | `rsl_rl_contrack/mimic.py`、`sharpa_recipe.py` | 原生入口与 H2R 共用的纯张量参考／抽样逻辑及公开 Sharpa 配方 |
 | `train.py` | 原 runner 的新入口与 checkpoint 上下文 |
+| `policy.py` | checkpoint／JSON／prepared 身份核验与原 `ActorCritic` 构建，评估客户端与原生闭环共用 |
 | `controller.py`、`protocol.py`、`evaluate.py` | 无 simulator 的反馈控制与 Unix socket |
+| `native_rollout.py` | 训练 setup 内首帧起始、冻结课程的确定性闭环诊断 |
 
 ```bash
 /opt/h2r/contrack/bin/python -m pytest tests/h2r -q

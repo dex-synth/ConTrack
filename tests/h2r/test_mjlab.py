@@ -232,3 +232,28 @@ def test_one_full_forward_keeps_multistep_rewards_contacts_and_resets(prepared, 
     finally:
         old.close()
         new.close()
+
+
+def test_native_rollout_starts_at_first_frame_with_frozen_library(prepared, tmp_path):
+    from contrack_h2r.native_rollout import rollout
+    wrapped = make_env(prepared, num_envs=2)
+    output = tmp_path / 'train'
+    output.mkdir()
+    cfg = training_config()
+    cfg['algorithm'].update(num_learning_epochs=1, num_mini_batches=1)
+    runner = H2RRunner(wrapped, cfg, output, 0)
+    runner.learn(1)
+    runner.writer.close()
+    wrapped.close()
+    checkpoint = output / 'model_0.pt'
+    saved = torch.load(checkpoint, weights_only=False)['infos']['reset_library']
+    for velocity in ('reference', 'zero'):
+        summary, arrays = rollout(prepared, checkpoint, num_envs=2, initial_velocity=velocity)
+        assert summary['checkpoint']['completed_iterations'] == 1
+        frames = arrays['frame']
+        assert (frames[:, 0] == np.arange(len(frames))).all()  # Fixed clock from the first frame.
+        world = summary['worlds'][0]
+        assert world['reason'] in ('pose_break', 'reference_end') and world['end_frame'] == len(frames) - 1
+        ema = float(saved['success_ema'])
+        weight = min(max((ema - 0.9) / (0.999 - 0.9), 0), 1)
+        assert summary['termination']['threshold_m'] == pytest.approx(0.1 - 0.05 * weight)
