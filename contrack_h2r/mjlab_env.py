@@ -61,6 +61,8 @@ class TaskState:
                           cone=int(m.opt.cone), impratio=m.opt.impratio,
                           contacts_per_world=env.cfg.sim.nconmax, constraints_per_world=env.cfg.sim.njmax,
                           prepared_id=binding['prepared_id'], use_cuda_graph=env.sim.use_cuda_graph,
+                          state_refresh='kinematics-com_pos-com_vel-v1',
+                          contact_timing='last_physics_solve',
                           training_randomization='disabled (native default)', recipe=PROVENANCE,
                           benchmark_duration_s=task['dt_s'] * task['end_tick'],
                           declared_episode_length_s=env.cfg.episode_length_s)
@@ -87,6 +89,11 @@ class TaskState:
         self.tensor(self.data, 'qpos')[:] = qpos[0]
         self.tensor(self.data, 'qvel')[:] = qvel[0]
         env.sim.forward()
+        self.kinematics_graph = None
+        if env.sim.use_cuda_graph:
+            with wp.ScopedDevice(env.sim.wp_device), wp.ScopedCapture() as capture:
+                self._kinematic_kernels()
+            self.kinematics_graph = capture.graph
         self.state = self._snapshot(self.data, self._contacts(self.data))
         self.previous_velocity = [v.clone() for v in velocity_groups(self.state, self.layout)]
         self.it_obj_pos_err_sum = torch.zeros((), device=self.device)
@@ -114,9 +121,10 @@ class TaskState:
         self.finished_step = self.env.common_step_counter
         if self.capacity_overflow.any():
             raise RuntimeError('MJWarp contact/constraint capacity exceeded during a physics substep')
-        # Keep solve-time contacts, then refresh post-integration poses via MJLab.
+        # Contacts belong to the last physics solve, one integration substep before
+        # current qpos/qvel. Save their local points before refreshing body frames.
         contacts = self._contacts(self.data)
-        self.env.sim.forward()
+        self._refresh_body_state()
         state = self._snapshot(self.data, contacts)
         for key in self.state:
             self.state[key].copy_(state[key])
@@ -141,6 +149,20 @@ class TaskState:
         self.frame[~(self.failed | self.timeout)] += 1
         self.env.extras['log'].update({'Tracking/position_m': position.mean(), 'Tracking/angle_rad': angle.mean(),
                                       'Curriculum/success_ema': self.library.success_ema.clone()})
+
+    def _kinematic_kernels(self):
+        # Only the fields consumed by _snapshot; no collision detection or solve.
+        mujoco_warp.kinematics(self.model, self.data)
+        mujoco_warp.com_pos(self.model, self.data)
+        mujoco_warp.com_vel(self.model, self.data)
+
+    def _refresh_body_state(self):
+        # MJLab still owns its one full forward after the possible batch reset.
+        with wp.ScopedDevice(self.env.sim.wp_device):
+            if self.env.sim.use_cuda_graph and self.kinematics_graph is not None:
+                wp.capture_launch(self.kinematics_graph)
+            else:
+                self._kinematic_kernels()
 
     def reset_reference(self, ids):
         start, state = self.library.sample(ids)
@@ -183,7 +205,7 @@ class TaskState:
                 (total/count.clamp(min=1)[:, None]).reshape(self.num_envs, h, p, 10, 3))
 
     def _snapshot(self, data, contacts):
-        # Caller refreshes poses through MJLab and supplies the desired solve-time contacts.
+        # Caller refreshes body kinematics and supplies the desired solve-time contacts.
         pos = self.tensor(data, 'xpos')[:, self.part_ids]
         quat = self.tensor(data, 'xquat')[:, self.part_ids]
         spatial = self.tensor(data, 'cvel')[:, self.part_ids]

@@ -8,6 +8,9 @@ import trimesh
 from .layout import CHAINS
 
 
+DEFAULT_CONTACT_DISTANCE_M = 0.005
+
+
 def part_meshes(scene):
     m = scene.model
     d = mujoco.MjData(m)
@@ -39,7 +42,7 @@ def segment_labels(joints, vertices):
     return distance.argmin(-1)
 
 
-def reference_contacts(scene, arrays, threshold=0.008):
+def reference_contacts(scene, arrays, threshold=DEFAULT_CONTACT_DISTANCE_M):
     layout = scene.layout
     shape = (len(arrays['time_s']), len(layout['hands']), len(layout['parts']), 10)
     flags, points = np.zeros(shape, bool), np.zeros((*shape, 3), np.float32)

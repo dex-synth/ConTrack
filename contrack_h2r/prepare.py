@@ -8,7 +8,7 @@ import subprocess
 import mujoco
 import numpy as np
 
-from .contacts import reference_contacts
+from .contacts import DEFAULT_CONTACT_DISTANCE_M, reference_contacts
 from .inputs import implementation_hashes, load_inputs, seal_prepared, write_json
 from .layout import make_layout
 from .mjwarp_scene import Scene
@@ -17,7 +17,8 @@ from .reset_reference import reset_reference
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
 
 
-def prepare(bundle, robot, task, output, *, mano_root, loader_python, ik_python, contact_distance=0.008):
+def prepare(bundle, robot, task, output, *, mano_root, loader_python, ik_python,
+            contact_distance=DEFAULT_CONTACT_DISTANCE_M):
     output = Path(output).resolve()
     if output.exists():
         raise FileExistsError(output)
@@ -74,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('bundle', 'robot', 'task', 'output', 'mano-root', 'loader-python', 'ik-python'):
         parser.add_argument('--' + name, required=True, type=Path)
-    parser.add_argument('--contact-distance', type=float, default=0.008)
+    parser.add_argument('--contact-distance', type=float, default=DEFAULT_CONTACT_DISTANCE_M)
     prepare(**vars(parser.parse_args()))
 
 

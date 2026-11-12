@@ -32,7 +32,7 @@ def test_reference_time_antipodes_contacts_and_endpoint(prepared):
     assert sample['contact'][0, 0, 0, 0] == 1
     torch.testing.assert_close(sample['part_quat'][..., 0].abs(), torch.ones(3, 2))
     targets = ref.targets(torch.tensor([[2., -2., 1.]]), torch.tensor([.1]))
-    torch.testing.assert_close(targets, torch.tensor([[.21, -.01, .25]]))
+    torch.testing.assert_close(targets, torch.tensor([[.2 + 2/30, -6.4/30, .25]]))
 
 
 def test_protocol_fragmentation_and_duplicate_keys():

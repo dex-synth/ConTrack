@@ -12,7 +12,7 @@ import torch
 from rsl_rl_contrack.runners import OnPolicyRunner
 from rsl_rl_contrack.sharpa_recipe import (
     ALGORITHM, CONTROL_HZ, MAX_ITERATIONS, NUM_ENVS, NUM_STEPS_PER_ENV,
-    PHYSICS_HZ, POLICY, PROVENANCE, SAVE_INTERVAL,
+    PHYSICS_HZ, POLICY, PROVENANCE, SAVE_INTERVAL, TRAINING_BUDGET,
 )
 
 from .inputs import digest, implementation_hashes, write_json
@@ -115,6 +115,7 @@ def main():
     write_json(args.output / 'run_config.json', {
         'recipe': PROVENANCE, 'arguments': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         'budget_override': args.iterations != MAX_ITERATIONS or args.num_envs != NUM_ENVS,
+        'budget_provenance': TRAINING_BUDGET,
         'transitions_per_update': args.num_envs * NUM_STEPS_PER_ENV,
         'init_at_random_ep_len': True, 'logger_override': 'tensorboard',
     })

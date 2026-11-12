@@ -1,7 +1,13 @@
-"""Explicit PPO settings of the public f5efe18 Sharpa entry, without Isaac imports."""
+"""Public Sharpa PPO settings with the paper's fixed update budget."""
 
 NUM_STEPS_PER_ENV = 16
-MAX_ITERATIONS = 100_000
+MAX_ITERATIONS = 5_000
+TRAINING_BUDGET = dict(
+    default_iterations=MAX_ITERATIONS,
+    source='https://arxiv.org/html/2606.03177v3#Pt0.A6',
+    scope='PPO updates only; parallel environments retain the public Sharpa setting',
+    upstream_default_iterations=100_000,
+)
 POLICY = dict(init_noise_std=1.0, actor_obs_normalization=True, critic_obs_normalization=True,
               actor_hidden_dims=[256, 256, 128], critic_hidden_dims=[256, 256, 128], activation='elu')
 ALGORITHM = dict(value_loss_coef=1.0, use_clipped_value_loss=True, clip_param=0.2,

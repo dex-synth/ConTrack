@@ -34,5 +34,7 @@ def make_layout(task, parts):
                 joint_units=[semantics['joint_units'][semantics['joint_names'].index(n)] for n in names],
                 parts=list(parts), part_bodies=[task['object']['parts'][p] for p in parts],
                 contact_bodies=slots, contact_order='hand,part,finger(PP,DP)',
-                action_scales={'wrist_translation': 0.01, 'wrist_rotation': 0.01, 'fingers': 0.25},
+                # Match LeanRetarget's Sharpa per-action wrist ranges; policy remains 60 Hz.
+                action_scales={'wrist_translation': 0.06666666666666667,
+                               'wrist_rotation': 0.21333333333333335, 'fingers': 0.25},
                 wrist_error_scales={'translation_m': 1.0, 'rotation_rad': 1.0})

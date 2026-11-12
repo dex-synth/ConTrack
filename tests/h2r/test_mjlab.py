@@ -158,3 +158,77 @@ def test_transient_substep_overflow_is_not_lost(prepared):
     task.tensor(task.data, 'overflow').zero_()
     with pytest.raises(RuntimeError, match='during a physics substep'):
         task.finish_step()
+
+
+@pytest.mark.parametrize('use_graph', [False, True])
+def test_body_refresh_matches_full_forward_without_resolving_contacts(prepared, use_graph):
+    wrapped = make_env(prepared, num_envs=2)
+    sim, task = wrapped.unwrapped.sim, wrapped.unwrapped.task_state
+    sim.use_cuda_graph = use_graph
+    try:
+        # Move away from an existing contact and articulate the object. Contact
+        # records must stay at the last solve while body frames become current.
+        contacts = task._contacts(task.data)
+        assert contacts[0][:, 0, 0, 0].all()
+        root = task.cpu_model.joint('object_free').qposadr[0]
+        qpos, qvel = task.tensor(task.data, 'qpos'), task.tensor(task.data, 'qvel')
+        qpos[:, root] += .2
+        qpos[:, root + 3:root + 7] = torch.tensor([.8, 0., 0., .6], device=task.device)
+        qpos[:, -1] = .4
+        qvel[:] = torch.arange(task.cpu_model.nv, device=task.device) * .1
+        data_fields = ('qpos', 'qvel', 'qacc', 'qacc_warmstart', 'qfrc_constraint', 'nacon')
+        before = {name: task.tensor(task.data, name).clone() for name in data_fields}
+        contact_before = {name: task.tensor(task.data.contact, name).clone()
+                          for name in ('geom', 'pos', 'efc_address')}
+        task._refresh_body_state()
+        for name, expected in before.items():
+            torch.testing.assert_close(task.tensor(task.data, name), expected, atol=0, rtol=0)
+        for name, expected in contact_before.items():
+            torch.testing.assert_close(task.tensor(task.data.contact, name), expected, atol=0, rtol=0)
+        actual = task._snapshot(task.data, contacts)
+        sim.forward()
+        expected = task._snapshot(task.data, contacts)
+        for name in actual:
+            torch.testing.assert_close(actual[name], expected[name], atol=1e-6, rtol=1e-6)
+        assert not task._contacts(task.data)[0][:, 0, 0, 0].any()
+    finally:
+        wrapped.close()
+
+
+def test_one_full_forward_keeps_multistep_rewards_contacts_and_resets(prepared, monkeypatch):
+    old = make_env(prepared, num_envs=2, seed=11)
+    new = make_env(prepared, num_envs=2, seed=11)
+    # Reconstruct the previous extra full-forward path as the comparison oracle.
+    monkeypatch.setattr(old.unwrapped.task_state, '_refresh_body_state', old.unwrapped.sim.forward)
+    forwards = []
+    full_forward = new.unwrapped.sim.forward
+
+    def count_forward():
+        forwards.append(new.unwrapped.common_step_counter)
+        full_forward()
+
+    monkeypatch.setattr(new.unwrapped.sim, 'forward', count_forward)
+    resets = 0
+    try:
+        for step in range(16):
+            action = torch.full((2, 3), .1, device=new.device)
+            torch.manual_seed(100 + step)
+            expected = old.step(action)
+            torch.manual_seed(100 + step)
+            actual = new.step(action)
+            assert len(forwards) == step + 1
+            torch.testing.assert_close(actual[0]['policy'], expected[0]['policy'], atol=2e-5, rtol=1e-4)
+            torch.testing.assert_close(actual[1], expected[1], atol=2e-5, rtol=1e-4)
+            assert torch.equal(actual[2], expected[2])
+            resets += int(actual[2].sum())
+            for name in ('rg', 'rs', 'rp'):
+                torch.testing.assert_close(actual[3][name], expected[3][name], atol=2e-5, rtol=1e-4)
+            a, b = new.unwrapped.task_state, old.unwrapped.task_state
+            for name in a.state:
+                torch.testing.assert_close(a.state[name], b.state[name], atol=2e-5, rtol=1e-4)
+            torch.testing.assert_close(a.tensor(a.data, 'qacc_warmstart'),
+                                       b.tensor(b.data, 'qacc_warmstart'), atol=2e-5, rtol=1e-4)
+        assert resets > 0
+    finally:
+        old.close()
+        new.close()

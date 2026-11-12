@@ -76,6 +76,7 @@ def make_native(source, num_envs=3, callbacks=None):
 
 
 def h2r_reference(source):
+    # The original-arm oracle uses its original scales, not the H2R wrist defaults.
     layout = dict(joint_names=list(range(29)), groups={'wrist_translation': list(range(3)),
                   'wrist_rotation': list(range(3, 7)), 'fingers': list(range(7, 29))},
                   action_scales={'wrist_translation': .01, 'wrist_rotation': .01, 'fingers': .25},
@@ -213,6 +214,7 @@ def synthetic_task(source, native):
     task.data = NS(qpos=torch.zeros(n, 71), qvel=torch.empty(n, 0), ctrl=torch.zeros(n, 29))
     task.tensor = lambda data, name: getattr(data, name)
     task._contacts = lambda data: None
+    task._refresh_body_state = lambda: None
     def snapshot(data, contacts):
         return dict(robot_q=data.qpos[:, :29].clone(), robot_dq=data.qpos[:, 29:58].clone(),
                     part_pose=data.qpos[:, 58:65, None].transpose(1, 2).clone(),
@@ -310,9 +312,10 @@ def test_public_recipe_defaults_and_non_native_clock_rejected(prepared):
     import inspect
     from contrack_h2r.mjlab_env import ConTrackEnv
     from contrack_h2r.train import argument_parser, training_config
-    from rsl_rl_contrack.sharpa_recipe import NUM_ENVS
+    from rsl_rl_contrack.sharpa_recipe import MAX_ITERATIONS, NUM_ENVS, TRAINING_BUDGET
     args = argument_parser().parse_args(['--prepared', str(prepared), '--output', 'unused'])
     assert args.num_envs == inspect.signature(ConTrackEnv).parameters['num_envs'].default == NUM_ENVS == 6000
+    assert args.iterations == MAX_ITERATIONS == TRAINING_BUDGET['default_iterations'] == 5000
     cfg = training_config()
     assert cfg['save_interval'] == 200 and cfg['num_steps_per_env'] * args.num_envs == 96000
     with pytest.raises(ValueError, match='60 Hz'):

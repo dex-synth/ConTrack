@@ -26,7 +26,7 @@ def prepared(tmp_path):
     layout = dict(hands=['right'], joint_names=['x', 'yaw', 'finger'], joint_units=['m', 'rad', 'rad'],
                   groups={'wrist_translation': [0], 'wrist_rotation': [1], 'fingers': [2]},
                   parts=['root', 'child'], part_bodies=['object', 'child'], contact_bodies={'hand': [0, 0]},
-                  action_scales={'wrist_translation': .01, 'wrist_rotation': .01, 'fingers': .25},
+                  action_scales={'wrist_translation': 2/30, 'wrist_rotation': 6.4/30, 'fingers': .25},
                   wrist_error_scales={'translation_m': 1., 'rotation_rad': 1.})
     task = dict(scene='scene.xml', dt_s=1/240, control_ticks=8, end_tick=24, task_id='test-task',
                 bundle_id='test-bundle', robot_manifest_sha256='test-robot',
