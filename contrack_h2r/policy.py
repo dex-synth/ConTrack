@@ -7,7 +7,7 @@ import torch
 from rsl_rl_contrack.modules import ActorCritic
 from rsl_rl_contrack.sharpa_recipe import PROVENANCE
 
-from .inputs import digest, read_json
+from .inputs import DEPLOYMENT_FORMAT, STATE_REFRESH, digest, read_json
 
 
 class Checkpoint:
@@ -22,7 +22,8 @@ class Checkpoint:
         # Trusted local pickle produced by contrack_h2r.train.
         self.saved = torch.load(self.path, map_location=device, weights_only=False)
         self.metadata = metadata = self.saved['infos']['h2r']
-        if metadata.get('format') != 'contrack-h2r-deployment-v2' or metadata.get('recipe') != PROVENANCE:
+        if (metadata.get('format') != DEPLOYMENT_FORMAT or metadata.get('recipe') != PROVENANCE
+                or metadata['training_physics'].get('state_refresh') != STATE_REFRESH):
             raise ValueError('Legacy or unsupported checkpoint; retrain for the native H2R recipe')
         if (metadata['prepared_id'] != binding['prepared_id'] or metadata['layout'] != binding['layout']
                 or metadata != {k: v for k, v in manifest.items() if k != 'checkpoint_sha256'}):

@@ -24,7 +24,7 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 
 from rsl_rl_contrack.sharpa_recipe import CONTROL_HZ, NUM_ENVS, PHYSICS_HZ, PROVENANCE
 
-from .inputs import load_prepared
+from .inputs import STATE_REFRESH, load_prepared
 from .mjwarp_scene import Scene
 from .reference import Reference
 from .resets import ResetLibrary
@@ -66,7 +66,7 @@ class TaskState:
                           cone=int(m.opt.cone), impratio=m.opt.impratio,
                           contacts_per_world=env.cfg.sim.nconmax, constraints_per_world=env.cfg.sim.njmax,
                           prepared_id=binding['prepared_id'], use_cuda_graph=env.sim.use_cuda_graph,
-                          state_refresh='kinematics-com_pos-com_vel-v1',
+                          state_refresh=STATE_REFRESH,
                           contact_timing='last_physics_solve',
                           training_randomization='disabled (native default)', recipe=PROVENANCE,
                           benchmark_duration_s=task['dt_s'] * task['end_tick'],

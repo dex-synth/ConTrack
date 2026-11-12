@@ -78,7 +78,7 @@ GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512�
 
 训练与评估物理频率可以不同。评估 task 的控制周期须与 checkpoint 的策略周期一致，例如 240 Hz 评估物理配合 60 Hz 控制；客户端拒绝静默改变策略频率。未来参考间隔来自 checkpoint 的训练时钟，源轨迹与计分时间仍由共同 task 决定。
 
-部署格式为 `contrack-h2r-deployment-v2`。每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训核验环境、训练频率和并行规模，恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。旧 v1 prepared／checkpoint 明确拒绝，须重新 prepare／train；历史产物保留原身份，读取旧产物使用对应旧 checkout。
+部署格式为 `contrack-h2r-deployment-v3`：每控制步只刷新运动学（`training_physics.state_refresh`），v2 训练时额外执行完整 `forward`，两者的 checkpoint 不混用。每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训核验环境、训练频率和并行规模，恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。旧 v1 prepared 与 v1／v2 checkpoint 明确拒绝，须重新 prepare 或 train（v2 prepared 仍有效）；历史产物保留原身份，读取旧产物使用对应旧 checkout。
 
 `training_physics.json` 记录共同终点、方法声明的 episode 时长、首帧起训练动作数与实际物理参数。`run_config.json` 保存有效启动参数、预算 override、原生随机 episode-length 初始化及日志差异；`timing.json` 保存环境初始化、训练耗时、更新尝试数和实际控制／物理步数。6000 环境的开销须实际测量，不沿用旧 4096 环境的耗时。
 

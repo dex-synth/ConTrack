@@ -15,7 +15,7 @@ from rsl_rl_contrack.sharpa_recipe import (
     PHYSICS_HZ, POLICY, PROVENANCE, SAVE_INTERVAL, TRAINING_BUDGET,
 )
 
-from .inputs import digest, implementation_hashes, write_json
+from .inputs import DEPLOYMENT_FORMAT, digest, implementation_hashes, write_json
 from .mjlab_env import make_env
 
 
@@ -29,7 +29,7 @@ def training_config():
 class H2RRunner(OnPolicyRunner):
     def __init__(self, env, cfg, output, seed):
         self.task = env.unwrapped.task_state
-        self.deployment = dict(format='contrack-h2r-deployment-v2', recipe=PROVENANCE,
+        self.deployment = dict(format=DEPLOYMENT_FORMAT, recipe=PROVENANCE,
                                prepared_id=self.task.binding['prepared_id'],
                                layout=self.task.layout, task_id=self.task.binding['task']['task_id'],
                                train_config=deepcopy(cfg), seed=seed, training_physics=self.task.audit,

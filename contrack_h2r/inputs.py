@@ -9,6 +9,10 @@ import numpy as np
 
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
 
+# v3: per-step body refresh runs kinematics/com_pos/com_vel only (v2 ran a second full forward).
+DEPLOYMENT_FORMAT = 'contrack-h2r-deployment-v3'
+STATE_REFRESH = 'kinematics-com_pos-com_vel-v1'
+
 
 def digest(path):
     with Path(path).open('rb') as stream:
