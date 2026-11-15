@@ -31,7 +31,8 @@ class H2RRunner(OnPolicyRunner):
         self.task = env.unwrapped.task_state
         self.deployment = dict(format=DEPLOYMENT_FORMAT, recipe=PROVENANCE,
                                prepared_id=self.task.binding['prepared_id'],
-                               layout=self.task.layout, task_id=self.task.binding['task']['task_id'],
+                               layout=self.task.layout,
+                               **{k: self.task.binding[k] for k in ('task_id', 'demo_id', 'robot_id')},
                                train_config=deepcopy(cfg), seed=seed, training_physics=self.task.audit,
                                implementation_sha256=implementation_hashes())
         super().__init__(env, deepcopy(cfg), str(output), env.device)
@@ -51,7 +52,7 @@ class H2RRunner(OnPolicyRunner):
         for key in ('format', 'recipe', 'prepared_id', 'layout', 'train_config'):
             if metadata.get(key) != self.deployment[key]:
                 raise ValueError(f'Checkpoint differs from this training task: {key}')
-        for key in ('environment', 'timestep_s', 'control_ticks', 'num_envs'):
+        for key in ('environment', 'timestep_s', 'control_dt_s', 'num_envs'):
             if metadata['training_physics'].get(key) != self.task.audit[key]:
                 raise ValueError(f'Checkpoint training setting differs: {key}')
         infos = self.load(path, map_location=self.device)

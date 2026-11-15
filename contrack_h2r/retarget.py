@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import shutil
 import subprocess
 
 import mujoco
@@ -12,6 +11,8 @@ from .inputs import check_files, read_json, write_json
 
 
 VENDOR = Path(__file__).parent / '_vendor' / 'v2d'
+# Method diagnostic only: the evaluation applies its own initial-penetration threshold.
+PENETRATION_REPORT_M = 0.02
 RECIPE = dict(name='flashchord-h2r-sharpa-ik-v1', solver='daqp', max_iter=100,
               frequency=200.0, frame_tasks_converged_threshold=1e-6,
               use_relative_frames=False, source_to_robot_scale=1.0)
@@ -25,23 +26,23 @@ def run_worker(python, module, *arguments):
     subprocess.run([str(python), '-m', module, *map(str, arguments)], env=env, check=True)
 
 
-def retarget(scene, arrays, qpos, *, bundle, robot, output, mano_root, loader_python, ik_python):
+def retarget(scene, task, qpos, *, output, mano_root, loader_python, ik_python):
+    """Both workers read the task through the vendored loader, in their own environments."""
     source = read_json(VENDOR / 'SOURCE.json')
     check_files(VENDOR, {name: item['sha256'] for name, item in source['files'].items()})
     output = Path(output)
     output.mkdir()
-    shutil.copytree(robot, output / 'robot')
     write_json(output / 'source.json', source)
     write_json(output / 'recipe.json', RECIPE)
     write_json(output / 'layout.json', scene.layout)
-    run_worker(loader_python, 'contrack_h2r.mano_features', '--bundle', bundle,
+    run_worker(loader_python, 'contrack_h2r.mano_features', '--task', task.path,
                '--mano-root', mano_root, '--output', output)
-    run_worker(ik_python, 'contrack_h2r.ik_worker', '--output', output)
+    run_worker(ik_python, 'contrack_h2r.ik_worker', '--task', task.path, '--output', output)
     with np.load(output / 'solution.npz', allow_pickle=False) as data:
         names = data['joint_names'].tolist()
         if len(names) != len(set(names)) or set(names) != set(scene.layout['joint_names']):
             raise ValueError('IK output differs from the complete controlled joint set')
-        if not np.array_equal(data['time_s'], arrays['time_s']):
+        if not np.array_equal(data['time_s'], task.demo.time_s):
             raise ValueError('IK changed the reference clock')
         q = data['joint_q'][:, [names.index(n) for n in scene.layout['joint_names']]]
     if (q.shape != (len(qpos), len(scene.qids)) or not np.isfinite(q).all()
@@ -51,10 +52,9 @@ def retarget(scene, arrays, qpos, *, bundle, robot, output, mano_root, loader_py
     return qpos, read_json(output / 'report.json')
 
 
-def penetration_report(scene, qpos):
+def penetration_report(scene, qpos, threshold=PENETRATION_REPORT_M):
     """Observe the resulting trajectory without changing any IK solution."""
     m, d = scene.model, mujoco.MjData(scene.model)
-    threshold = scene.task['initialization']['max_penetration_m']
     depths, worst = [], None
     for frame, q in enumerate(qpos):
         d.qpos[:] = q

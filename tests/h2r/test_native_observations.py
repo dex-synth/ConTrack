@@ -49,9 +49,8 @@ def test_native_feature_layout():
                           ('all_qpos', 'all_qvel', 'hand_contact', 'ref_all_qpos', 'ref_hand_contact', 'phase')], -1)
     arrays = dict(time_s=np.arange(length)/30, robot_q=q.reshape(length, 58), part_pos=pos, part_quat=quat,
                   contact=contacts, contact_points=torch.zeros(length, 2, p, 10, 3))
-    binding = dict(task={'dt_s': 1/240, 'control_ticks': 8},
-                   layout={'joint_names': list(range(58)), 'groups': {}, 'action_scales': {}})
-    reference = Reference(binding, arrays, 'cpu')
+    layout = {'joint_names': list(range(58)), 'groups': {}, 'action_scales': {}}
+    reference = Reference(layout, arrays, 'cpu', 1/30)
     state = dict(robot_q=q[frame].reshape(n, 58), robot_dq=dq, part_pose=torch.cat((pos[frame], quat[frame]), -1),
                  part_velocity=velocity, contact=contacts[frame])
     actual = reference.observations(state, reference.time[frame])['policy']

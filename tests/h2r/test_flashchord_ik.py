@@ -8,10 +8,8 @@ from types import SimpleNamespace
 import mujoco
 import numpy as np
 import pytest
-from scipy.spatial.transform import Rotation
 
 from contrack_h2r.inputs import implementation_hashes
-from contrack_h2r.mano_features import mano_parameters
 from contrack_h2r.retarget import VENDOR, penetration_report
 
 
@@ -32,29 +30,13 @@ def test_frozen_sources_and_manifest_are_bound():
                     assert hashlib.sha256(body.encode()).hexdigest() == record['extracts'][extracted]
 
 
-def test_source_world_conversion_preserves_internal_hand_pose():
-    local = Rotation.from_euler('xyz', np.arange(48).reshape(16, 3) / 100)
-    world = np.eye(4)
-    world[:3, :3] = Rotation.from_euler('z', .7).as_matrix()
-    world[:3, 3] = [.1, -.2, .3]
-    arrays = {'right_mano_quat': local.as_quat(scalar_first=True)[None],
-              'right_mano_trans': np.array([[.3, .4, .5]])}
-    ref = {'mano': {'parameter_coordinates': 'source_world'},
-           'coordinates': {'source_to_benchmark': world}}
-    orient, fingers, trans = mano_parameters(ref, arrays, 'right')
-    np.testing.assert_allclose(Rotation.from_rotvec(orient).as_matrix()[0],
-                               world[:3, :3] @ local.as_matrix()[0], atol=1e-12)
-    np.testing.assert_allclose(fingers.reshape(15, 3), local.as_rotvec()[1:], atol=1e-12)
-    np.testing.assert_allclose(trans, arrays['right_mano_trans'] @ world[:3, :3].T + world[:3, 3])
-
-
 def test_penetration_diagnostic_does_not_modify_reference(prepared):
     model = mujoco.MjModel.from_xml_path(str(prepared / 'task/scene.xml'))
-    scene = SimpleNamespace(model=model, task={'initialization': {'max_penetration_m': .005}})
+    scene = SimpleNamespace(model=model)
     qpos = np.tile(model.qpos0, (2, 1))
     qpos[1, model.joint('x').qposadr[0]] = -.1
     original = qpos.copy()
-    report = penetration_report(scene, qpos)
+    report = penetration_report(scene, qpos, threshold=.005)
     np.testing.assert_array_equal(qpos, original)
     assert report['frames_above_threshold'] == [0]
     assert report['max_depth_m'] == pytest.approx(.01)

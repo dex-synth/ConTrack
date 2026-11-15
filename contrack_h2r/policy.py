@@ -24,7 +24,8 @@ class Checkpoint:
         self.metadata = metadata = self.saved['infos']['h2r']
         if (metadata.get('format') != DEPLOYMENT_FORMAT or metadata.get('recipe') != PROVENANCE
                 or metadata['training_physics'].get('state_refresh') != STATE_REFRESH):
-            raise ValueError('Legacy or unsupported checkpoint; retrain for the native H2R recipe')
+            raise ValueError(f'Unsupported checkpoint ({metadata.get("format")}): retrain with contrack_h2r.train '
+                             f'for {DEPLOYMENT_FORMAT} and the current recipe')
         if (metadata['prepared_id'] != binding['prepared_id'] or metadata['layout'] != binding['layout']
                 or metadata != {k: v for k, v in manifest.items() if k != 'checkpoint_sha256'}):
             raise ValueError('Checkpoint does not match preparation/deployment metadata')
@@ -32,7 +33,7 @@ class Checkpoint:
         self.layout = binding['layout']
         physics = metadata['training_physics']
         self.timestep_s = physics['timestep_s']
-        self.control_dt = physics.get('control_ticks', binding['task']['control_ticks']) * self.timestep_s
+        self.control_dt = physics['control_dt_s']
         # The runner saves model_{it}.pt after update index it.
         self.completed_updates = int(self.saved['iter']) + 1
 

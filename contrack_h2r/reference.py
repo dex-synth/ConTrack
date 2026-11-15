@@ -7,9 +7,9 @@ from rsl_rl_contrack.mimic import resample_reference
 
 
 class Reference:
-    def __init__(self, binding, arrays, device, control_dt=None):
-        self.layout = binding['layout']
-        self.dt = control_dt if control_dt is not None else binding['task']['dt_s'] * binding['task']['control_ticks']
+    def __init__(self, layout, arrays, device, control_dt):
+        """`control_dt` is the method's own policy period; no task or evaluation clock enters here."""
+        self.layout, self.dt = layout, control_dt
         source_time = torch.as_tensor(arrays['time_s'], dtype=torch.float64)
         self.duration = float(source_time[-1])
         source_fps = (len(source_time) - 1) / self.duration

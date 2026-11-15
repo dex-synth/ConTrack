@@ -11,7 +11,7 @@ from .reference import Reference
 
 
 def reset_reference(model, layout, arrays):
-    reference = Reference({'layout': layout}, arrays, 'cpu', 1 / CONTROL_HZ)
+    reference = Reference(layout, arrays, 'cpu', 1 / CONTROL_HZ)
     values = reference.data
     source = torch.as_tensor(arrays['qpos'], dtype=torch.float32)
     # Scalar joints use the same interpolation as the robot reference. Free-root

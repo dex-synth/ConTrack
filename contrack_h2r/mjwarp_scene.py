@@ -5,9 +5,9 @@ import numpy as np
 
 
 class Scene:
-    def __init__(self, path, task, layout):
+    def __init__(self, path, layout):
         self.model = m = mujoco.MjModel.from_xml_path(str(path))
-        self.task, self.layout = task, layout
+        self.layout = layout
         joints = np.array([m.joint(n).id for n in layout['joint_names']])
         if not np.isin(m.jnt_type[joints], [mujoco.mjtJoint.mjJNT_SLIDE, mujoco.mjtJoint.mjJNT_HINGE]).all():
             raise ValueError('Controlled joints must be scalar')
@@ -34,26 +34,23 @@ class Scene:
         self.body_parts = np.full(m.nbody, -1, dtype=np.int32)
         self.body_parts[self.part_ids] = np.arange(len(self.part_ids))
 
-    def object_qpos(self, arrays):
+    def object_qpos(self, demo):
         """Recover consistent generalized coordinates, never independent child poses."""
-        m, task = self.model, self.task
-        q = np.tile(m.qpos0, (len(arrays['time_s']), 1))
-        obj = task['object']
-        roots = obj.get('roots', {'object': {'body': obj['root_body'], 'joint': obj.get('root_joint')}})
-        for root in roots.values():
-            joint = m.joint(root['joint'])
-            if joint.type[0] != mujoco.mjtJoint.mjJNT_FREE:
-                raise ValueError('Expected free root')
-            part = self.layout['part_bodies'].index(root['body'])
-            address = joint.qposadr[0]
-            q[:, address:address+3] = arrays['part_pos_m'][:, part]
-            q[:, address+3:address+7] = arrays['part_quat_wxyz'][:, part]
-        for name, joint_name in obj['joints'].items():
-            joint = m.joint(joint_name)
-            if joint.type[0] != mujoco.mjtJoint.mjJNT_HINGE:
-                raise ValueError('Only passive hinges are currently supported')
-            key = obj.get('reference_joint_keys', {}).get(name, 'object_hinge_rad')
-            q[:, joint.qposadr[0]] = arrays[key]
+        m = self.model
+        q = np.tile(m.qpos0, (len(demo.time_s), 1))
+        for obj in demo.objects.values():
+            if obj.root_joint:  # A fixed root has no coordinates; the FK check below still covers it.
+                joint = m.joint(obj.root_joint)
+                if joint.type[0] != mujoco.mjtJoint.mjJNT_FREE:
+                    raise ValueError('Expected free root')
+                address = joint.qposadr[0]
+                q[:, address:address+3], q[:, address+3:address+7] = demo.part_pose(obj.root_part)
+            for hinge in obj.joints:
+                joint = m.joint(hinge.mjcf_name)
+                if joint.type[0] != mujoco.mjtJoint.mjJNT_HINGE:
+                    raise ValueError('Only passive hinges are currently supported')
+                q[:, joint.qposadr[0]] = hinge.position_rad
+        arrays = demo.arrays
         d = mujoco.MjData(m)
         max_error = 0.0
         for i in range(len(q)):

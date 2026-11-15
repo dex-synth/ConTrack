@@ -11,14 +11,14 @@ from .layout import CHAINS
 DEFAULT_CONTACT_DISTANCE_M = 0.005
 
 
-def part_meshes(scene):
+def part_meshes(scene, surface_geoms):
     m = scene.model
     d = mujoco.MjData(m)
     mujoco.mj_kinematics(m, d)
     meshes = []
     for part, body in zip(scene.layout['parts'], scene.part_ids):
         pieces = []
-        for name in scene.task['object']['surface_geoms'][part]:
+        for name in surface_geoms[part]:
             g = m.geom(name).id
             if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH or m.geom_bodyid[g] != body:
                 raise ValueError('Expected a part-local visual mesh')
@@ -42,14 +42,15 @@ def segment_labels(joints, vertices):
     return distance.argmin(-1)
 
 
-def reference_contacts(scene, arrays, threshold=DEFAULT_CONTACT_DISTANCE_M):
-    layout = scene.layout
+def reference_contacts(scene, task, threshold=DEFAULT_CONTACT_DISTANCE_M):
+    layout, arrays = scene.layout, task.demo.arrays
     shape = (len(arrays['time_s']), len(layout['hands']), len(layout['parts']), 10)
     flags, points = np.zeros(shape, bool), np.zeros((*shape, 3), np.float32)
-    meshes = part_meshes(scene)
+    meshes = part_meshes(scene, task.object_binding['surface_geoms'])
     for h, side in enumerate(layout['hands']):
-        for t, vertices in enumerate(arrays[f'{side}_vertices_m']):
-            labels = segment_labels(arrays[f'{side}_joints_m'][t], vertices)
+        hand = task.demo.hands[side]
+        for t, vertices in enumerate(hand.vertices_m):
+            labels = segment_labels(hand.joints_m[t], vertices)
             for p, mesh in enumerate(meshes):
                 rotation = Rotation.from_quat(arrays['part_quat_wxyz'][t, p], scalar_first=True).as_matrix()
                 local = (vertices - arrays['part_pos_m'][t, p]) @ rotation

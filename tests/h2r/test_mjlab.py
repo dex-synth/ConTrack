@@ -10,7 +10,6 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from contrack_h2r.controller import Controller
 from contrack_h2r.train import H2RRunner, training_config
-from contrack_h2r.inputs import load_prepared, seal_prepared, write_json
 
 pytestmark = pytest.mark.skipif(os.environ.get('CONTRACK_TEST_GPU') != '1', reason='Set CONTRACK_TEST_GPU=1 for GPU integration')
 
@@ -42,10 +41,6 @@ def test_real_contact_body_velocity_and_mask_reset(prepared):
 
 
 def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
-    binding, arrays = load_prepared(prepared)
-    binding['task']['control_ticks'] = 4
-    write_json(prepared / 'task/task.json', binding['task'])
-    seal_prepared(prepared, {k: v for k, v in binding.items() if k not in ('files', 'prepared_id')})
     wrapped = make_env(prepared, num_envs=2)
     env = wrapped.unwrapped.task_state
     cfg = training_config()
@@ -57,21 +52,29 @@ def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
     runner.writer.close()
     checkpoint = output / 'model_0.pt'
     controller = Controller(prepared, checkpoint, 'cuda:0')
-    task, layout = env.binding['task'], env.layout
-    # Deliberately permute evaluator joints; training and deployment must still agree.
+    binding, layout = env.binding, env.layout
+    # The evaluation runs its own 300 Hz step and announces no control period; the client
+    # declares the trained 60 Hz one. Deliberately permute evaluator joints as well.
     order = [2, 0, 1]
-    hello = dict(type='hello', protocol='h2r-evaluation-v1',
-                 **{k: task[k] for k in ('task_id', 'bundle_id', 'robot_manifest_sha256', 'dt_s',
-                                          'control_ticks', 'end_tick', 'object', 'observation')},
-                 joint_names=[layout['joint_names'][i] for i in order],
-                 joint_units=[layout['joint_units'][i] for i in order],
+    dt, end_tick = 1/300, 30
+    hello = dict(type='hello', protocol='h2r-evaluation-v2', dt_s=dt, end_tick=end_tick,
+                 **{k: binding[k] for k in ('task_id', 'demo_id', 'robot_id')},
+                 joint_names=[layout['joint_names'][i] for i in order], observation={'contacts': True},
                  episodes=[{'episode_id': str(i)} for i in range(2)])
-    controller.start(hello)
+    start = controller.start(hello)
+    assert start['requirements'] == {'bodies': layout['part_bodies'], 'contacts': True, 'control_dt_s': 1/60}
+    assert start['binding']['method'] == 'ConTrack-H2R' and start['task_id'] == binding['task_id']
+    assert start['binding']['controller']['completed_iterations'] == 1
+    assert controller.control_ticks == 5
+    for change, message in [({'protocol': 'h2r-evaluation-v1'}, 'Unsupported evaluator protocol'),
+                            ({'task_id': 'other'}, 'different task'), ({'dt_s': 1/100}, 'not a whole number')]:
+        with pytest.raises(ValueError, match=message):
+            controller.start({**hello, **change})
     runner.alg.policy.eval()
     for _ in range(3):
         frames = []
         for i in range(2):
-            tick = int(env.frame[i])*task['control_ticks']
+            tick = int(env.frame[i])*controller.control_ticks
             # The fixture's training auto-resets are separate from the server lifecycle.
             controller.next_tick[str(i)] = tick
             state = env.state
@@ -80,8 +83,8 @@ def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
                 for p, part in enumerate(layout['part_bodies']):
                     if state['contact'][i, hand, p, slot]:
                         records.append({'body1': part, 'body2': body})  # swap pair orientation
-            done = tick >= task['end_tick'] or str(i) in controller.finished
-            frames.append(dict(episode_id=str(i), tick=tick, time_s=tick*task['dt_s'], done=done,
+            done = tick >= end_tick or str(i) in controller.finished
+            frames.append(dict(episode_id=str(i), tick=tick, time_s=tick*dt, done=done,
                                robot_q=state['robot_q'][i, order].tolist(), robot_dq=state['robot_dq'][i, order].tolist(),
                                bodies={b: torch.cat((state['part_pose'][i, p], state['part_velocity'][i, p])).tolist()
                                        for p, b in enumerate(layout['part_bodies'])},
@@ -112,17 +115,6 @@ def test_ppo_resume_and_complete_controller_parity(prepared, tmp_path):
     wrapped.close()
 
 
-def test_incomplete_training_interval_is_rejected(prepared):
-    binding, arrays = load_prepared(prepared)
-    binding['task']['end_tick'] = 22
-    arrays['time_s'][-1] = 22/240
-    np.savez(prepared / 'reference.npz', **arrays)
-    write_json(prepared / 'task/task.json', binding['task'])
-    seal_prepared(prepared, {k: v for k, v in binding.items() if k not in ('files', 'prepared_id')})
-    with pytest.raises(ValueError, match='complete training control intervals'):
-        make_env(prepared, num_envs=1)
-
-
 def test_native_clock_and_mjlab_graph_parity(prepared):
     eager = make_env(prepared, num_envs=2, seed=4)
     eager.unwrapped.sim.use_cuda_graph = False
@@ -134,8 +126,8 @@ def test_native_clock_and_mjlab_graph_parity(prepared):
     assert graph.unwrapped.sim.use_cuda_graph
     assert task.cpu_model.opt.timestep == 1/120
     assert task.substeps == 2 and task.reference.dt == 1/60
-    assert task.binding['task']['dt_s'] == 1/240
-    assert task.binding['task']['control_ticks'] == 8
+    assert graph.unwrapped.h2r_task.timestep_s == 1/300  # the task's nominal step is not inherited
+    assert task.audit['timestep_s'] == 1/120 and task.audit['control_dt_s'] == 1/60
     assert graph.max_episode_length == 8  # native raw_len/raw_fps declaration
     assert len(task.clock) == 7  # including the private terminal reference action
     for i in range(8):

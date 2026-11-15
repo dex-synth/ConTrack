@@ -29,7 +29,7 @@ def rollout(prepared, checkpoint, *, num_envs=1, device='cuda:0', initial_veloci
                    physics_hz=1 / model.timestep_s, seed=model.metadata['seed'])
     try:
         task = env.unwrapped.task_state
-        if task.audit['timestep_s'] != physics['timestep_s'] or task.audit['control_ticks'] != physics['control_ticks']:
+        if task.audit['timestep_s'] != physics['timestep_s'] or task.audit['control_dt_s'] != physics['control_dt_s']:
             raise ValueError('Rollout clocks differ from the checkpoint training clocks')
         task.library.load_state_dict(model.saved['infos']['reset_library'])
         task.rollout = {'start': 0, 'velocity': initial_velocity}
@@ -71,7 +71,7 @@ def rollout(prepared, checkpoint, *, num_envs=1, device='cuda:0', initial_veloci
             object_angle_error_rad={'mean': float(angle.mean()), 'max': float(angle.max())}))
     summary = dict(
         format='contrack-h2r-native-rollout-v1', scope='training-setup diagnostic; not a benchmark result',
-        checkpoint=model.identity(), prepared_id=binding['prepared_id'], task_id=binding['task']['task_id'],
+        checkpoint=model.identity(), prepared_id=binding['prepared_id'], task_id=binding['task_id'],
         physics={'backend': physics['backend'], 'timestep_s': model.timestep_s, 'control_dt_s': dt},
         start_frame=0, initial_velocity=initial_velocity, num_envs=num_envs,
         policy='ActorCritic.act_inference (deterministic)',

@@ -3,18 +3,22 @@
 import numpy as np
 import torch
 
+from .h2r_io import client
 from .inputs import load_prepared
 from .policy import Checkpoint
 from .reference import Reference
+
+METHOD = 'ConTrack-H2R'
 
 
 class Controller:
     def __init__(self, prepared, checkpoint, device='cpu'):
         self.binding, arrays = load_prepared(prepared)
-        self.layout, self.task = self.binding['layout'], self.binding['task']
+        self.layout = self.binding['layout']
         self.device = device
         self.checkpoint = Checkpoint(checkpoint, self.binding, device)
-        self.reference = Reference(self.binding, arrays, device, self.checkpoint.control_dt)
+        # The policy period is the trained one; the evaluation's physics step arrives with hello.
+        self.reference = Reference(self.layout, arrays, device, self.checkpoint.control_dt)
         # Shapes are determined by the common feature function; no physical world is created.
         h, p, n = len(self.layout['hands']), len(self.layout['parts']), len(self.layout['joint_names'])
         zero = lambda *shape: torch.zeros(shape, device=device)
@@ -26,36 +30,23 @@ class Controller:
         self.finished = set()
 
     def start(self, hello):
-        if hello.get('type') != 'hello' or hello.get('protocol') != 'h2r-evaluation-v1':
-            raise ValueError('Unsupported evaluator protocol')
-        for key in ('task_id', 'bundle_id', 'robot_manifest_sha256', 'dt_s', 'control_ticks', 'end_tick'):
-            if hello[key] != self.task[key]:
-                raise ValueError(f'Evaluator differs from prepared task: {key}')
-        if not np.isclose(hello['dt_s'] * hello['control_ticks'], self.reference.dt, atol=1e-12, rtol=0):
-            raise ValueError('Evaluator must deliver real feedback at the trained policy frequency')
-        if (set(hello['joint_names']) != set(self.layout['joint_names'])
-                or len(hello['joint_names']) != len(self.layout['joint_names'])):
-            raise ValueError('Incomplete evaluator joint set')
+        if hello.get('type') != 'hello' or hello.get('protocol') != client.PROTOCOL:
+            raise ValueError(f'Unsupported evaluator protocol {hello.get("protocol")!r}; expected {client.PROTOCOL}')
+        if hello['task_id'] != self.binding['task_id']:
+            raise ValueError('Evaluator runs a different task than the prepared one')
+        if not hello['observation']['contacts']:
+            raise ValueError('ConTrack requires contact observations; the evaluation has them disabled')
+        self.control_ticks = client.control_ticks(hello, self.reference.dt)
+        self.dt_s, self.end_tick = hello['dt_s'], hello['end_tick']
+        # Joints are matched by name; the task_id already fixes the set, units and object semantics.
         self.joint_order = [hello['joint_names'].index(n) for n in self.layout['joint_names']]
-        if [hello['joint_units'][i] for i in self.joint_order] != self.layout['joint_units']:
-            raise ValueError('Evaluator joint units differ')
-        observation = hello['observation']
-        if (not observation['contacts'] or observation['contact_schema'] != 'h2r-body-contacts-v1'
-                or observation['quaternion'] != 'wxyz' or observation['body_velocity'] != 'world_at_body_origin'
-                or not set(self.layout['part_bodies']) <= set(observation['bodies'])):
-            raise ValueError('Required body/contact observations unavailable')
-        if hello['object'] != self.task['object']:
-            raise ValueError('Object semantics differ')
         self.next_tick = {e['episode_id']: 0 for e in hello['episodes']}
         if len(self.next_tick) != len(hello['episodes']) or not self.next_tick:
             raise ValueError('Invalid episode IDs')
-        return dict(type='start', task_id=hello['task_id'],
-                    binding=dict(bundle_id=hello['bundle_id'], robot_manifest_sha256=hello['robot_manifest_sha256'],
-                                 method='ConTrack-H2R', controller={**self.checkpoint.identity(),
-                                                               'prepared_id': self.binding['prepared_id']}),
-                    requirements=dict(bodies=self.layout['part_bodies'], contacts=True,
-                                      control_dt_s=self.reference.dt),
-                    initial_robot={e: self.initial for e in self.next_tick})
+        return client.start_request(
+            hello, method=METHOD, controller={**self.checkpoint.identity(), 'prepared_id': self.binding['prepared_id']},
+            initial_robot={e: self.initial for e in self.next_tick}, control_dt_s=self.reference.dt,
+            bodies=self.layout['part_bodies'], contacts=True)
 
     def state(self, frames):
         h, p = len(self.layout['hands']), len(self.layout['parts'])
@@ -96,8 +87,8 @@ class Controller:
                 self.finished.add(eid)
                 continue
             if (eid in self.finished or frame['tick'] != self.next_tick[eid]
-                    or frame['tick'] >= self.task['end_tick']
-                    or not np.isclose(frame['time_s'], frame['tick']*self.task['dt_s'], atol=1e-10, rtol=0)):
+                    or frame['tick'] >= self.end_tick
+                    or not np.isclose(frame['time_s'], frame['tick']*self.dt_s, atol=1e-10, rtol=0)):
                 raise ValueError('Invalid control tick or episode lifecycle')
             active.append(frame)
         if bool(message['done']) != (len(self.finished) == len(self.next_tick)):
@@ -112,5 +103,5 @@ class Controller:
         for frame, target in zip(active, targets):
             eid = frame['episode_id']
             commands[eid] = dict(tick=frame['tick'], joint_targets=dict(zip(self.layout['joint_names'], target.tolist())))
-            self.next_tick[eid] = min(self.task['end_tick'], frame['tick']+self.task['control_ticks'])
+            self.next_tick[eid] = min(self.end_tick, frame['tick']+self.control_ticks)
         return dict(type='step', commands=commands)

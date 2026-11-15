@@ -19,13 +19,14 @@ from robotic_grounding.retarget import SHARPA_WAVE_XMLS_DIR
 from robotic_grounding.retarget.hand_kinematics import SharpaHandKinematics
 from robotic_grounding.retarget.retarget_utils import wrist_pose_from_mano_joint0
 
+from .h2r_io import load_task
 
-def prepare_models(output, hands):
+
+def prepare_models(package, output):
     """FlashCHORD's common-hand subtree and native-site construction."""
-    robot = portable_xml(output / 'robot/robot.xml', output / 'robot.xml')
-    compiled = json.loads((output / 'robot/compiled.json').read_text())
+    robot = portable_xml(package.mjcf, output / 'robot.xml')
     for actuator in robot.findall('actuator/*'):
-        joint = compiled['joints'][actuator.attrib['joint']]
+        joint = package.compiled['joints'][actuator.attrib['joint']]
         actuator.attrib.pop('dampratio', None)
         actuator.attrib.pop('inheritrange', None)
         actuator.set('kv', numbers([joint['kv']]))
@@ -37,9 +38,9 @@ def prepare_models(output, hands):
     model = mujoco.MjModel.from_xml_path(str(output / 'robot.xml'))
     state = mujoco.MjData(model)
     mujoco.mj_forward(model, state)
-    for side in hands:
+    for side, hand in package.semantics['hands'].items():
         ik = copy.deepcopy(robot)
-        palm = copy.deepcopy(ik.find(f".//body[@name='{side}_hand_C_MC']"))
+        palm = copy.deepcopy(ik.find(f".//body[@name='{hand['wrist_body']}']"))
         palm.attrib.pop('pos', None)
         palm.attrib.pop('quat', None)
         for joint in list(palm.findall('joint')):
@@ -67,12 +68,13 @@ def prepare_models(output, hands):
     return model, state
 
 
-def solve(output):
+def solve(task, output):
+    package = load_task(task).robot
     layout = json.loads((output / 'layout.json').read_text())
     recipe = json.loads((output / 'recipe.json').read_text())
     with np.load(output / 'features.npz', allow_pickle=False) as data:
         features = dict(data)
-    model, state = prepare_models(output, layout['hands'])
+    model, state = prepare_models(package, output)
     joint_q = np.zeros((len(features['time_s']), len(layout['joint_names'])))
     report = {'python': platform.python_version(), 'recipe': recipe,
               'versions': {n: version(n) for n in ('pin', 'pin-pink', 'daqp', 'qpsolvers', 'numpy', 'scipy', 'mujoco')}}
@@ -82,12 +84,12 @@ def solve(output):
                                       ('solver', 'max_iter', 'frequency', 'use_relative_frames',
                                        'frame_tasks_converged_threshold')})
         fingers = list(solver.robot_finger_joint_names.values())
-        wrist_names = [f'{side}_{axis}_joint' for axis in ('x', 'y', 'z', 'roll', 'pitch', 'yaw')]
-        finger_ids = [model.joint(name).qposadr[0] for name in fingers]
+        hand = package.semantics['hands'][side]
+        wrist_names = hand['wrist_translation_joints'] + hand['wrist_rotation_joints']
         wrist_ids = [model.joint(name).qposadr[0] for name in wrist_names]
         state.qpos[:] = 0
         mujoco.mj_forward(model, state)
-        base = state.body(f'{side}_hand_C_MC').xpos.copy()
+        base = state.body(hand['wrist_body']).xpos.copy()
         fk_error = check_ik_model(solver, model, state, side, fingers, wrist_ids, base)
         q, previous = None, None
         errors, iterations, tip_errors = [], [], []
@@ -110,7 +112,7 @@ def solve(output):
                 joint_q[t, layout['joint_names'].index(name)] = value
                 state.qpos[model.joint(name).qposadr[0]] = value
             mujoco.mj_forward(model, state)
-            palm = state.body(f'{side}_hand_C_MC')
+            palm = state.body(hand['wrist_body'])
             np.testing.assert_allclose(palm.xpos, q[:3], atol=2e-6, rtol=0)
             if abs(np.dot(palm.xquat, q[[6, 3, 4, 5]])) < 1 - 1e-9:
                 raise ValueError(f'Wrist FK mismatch at {side} frame {t}')
@@ -135,5 +137,6 @@ def solve(output):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', required=True, type=Path)
+    for name in ('task', 'output'):
+        parser.add_argument('--' + name, required=True, type=Path)
     solve(**vars(parser.parse_args()))

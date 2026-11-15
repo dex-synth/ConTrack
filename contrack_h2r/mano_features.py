@@ -1,4 +1,9 @@
-"""Bundle boundary for FlashCHORD's unchanged MANO/AxisLayerFK decoder."""
+"""Task boundary for FlashCHORD's unchanged MANO/AxisLayerFK decoder.
+
+The IK targets are the decoder's own output: joint positions with its fingertip vertices
+(NATIVE_TIPS, not the task's tip vertices) and AxisLayerFK joint orientations, which the task
+package does not carry. The decoded mesh and MANO joints must reproduce the task's geometry.
+"""
 
 import argparse
 import hashlib
@@ -11,72 +16,54 @@ import tempfile
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .h2r_io import load_task
 
-def mano_parameters(reference, arrays, side):
-    """Convert dataset parameter representations, keeping the benchmark world."""
-    prefix = f'{side}_mano_'
-    if prefix + 'quat' in arrays:
-        quat = arrays[prefix + 'quat']
-        if quat.shape[1:] != (16, 4) or not np.allclose(np.linalg.norm(quat, axis=-1), 1, atol=1e-5):
-            raise ValueError('Expected sixteen unit MANO quaternions in wxyz order')
-        pose = Rotation.from_quat(quat.reshape(-1, 4)[:, [1, 2, 3, 0]]).as_rotvec().reshape(-1, 48)
-        orient, fingers = pose[:, :3], pose[:, 3:]
-    else:
-        orient, fingers = arrays[prefix + 'rot'], arrays[prefix + 'pose']
-    trans = arrays[prefix + 'trans']
-    if reference['mano'].get('parameter_coordinates') == 'source_world':
-        world = np.asarray(reference['coordinates']['source_to_benchmark'])
-        orient = (Rotation.from_matrix(world[:3, :3]) * Rotation.from_rotvec(orient)).as_rotvec()
-        trans = trans @ world[:3, :3].T + world[:3, 3]
-    return orient, fingers, trans
+# Decoder joint order (wrist, then thumb..pinky with their tips) as indices into the task's joints_m.
+ORDER = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]
+TIP_SLOTS = [4, 8, 12, 16, 20]
+NATIVE_TIPS = {'left': [745, 317, 445, 556, 673], 'right': [745, 317, 444, 556, 673]}
 
 
-def decode(bundle, mano_root, output):
+def decode(task, mano_root, output):
     import torch
     from v2d.task_library_loader.lib.read_mano import MANO
 
     torch.set_num_threads(1)
-    reference = json.loads((bundle / 'reference.json').read_text())
-    layout = json.loads((output / 'layout.json').read_text())
-    with np.load(bundle / 'reference.npz', allow_pickle=False) as data:
-        arrays = dict(data)
+    demo = load_task(task).demo
+    convention = demo.reference['mano']
     with tempfile.TemporaryDirectory() as temp:
         models = Path(temp) / 'models'
         models.mkdir()
-        for side in ('LEFT', 'RIGHT'):
-            name = f'MANO_{side}.pkl'
-            source = (mano_root / name).resolve()
-            expected = next(a['sha256'] for a in reference['mano']['assets'] if a['name'] == name)
-            if hashlib.sha256(source.read_bytes()).hexdigest() != expected:
-                raise ValueError(f'MANO asset differs from the common bundle: {name}')
-            (models / name).symlink_to(source)
-        mano = MANO(temp, device=torch.device('cpu'), flat_hand_mean=reference['mano']['flat_hand_mean'],
-                    center_idx=0 if reference['mano'].get('wrist_recentered') else None)
-    order = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]
-    result = {'time_s': arrays['time_s']}
-    checks = {'python': platform.python_version(),
+        for asset in convention['assets']:
+            source = (mano_root / asset['name']).resolve()
+            if hashlib.sha256(source.read_bytes()).hexdigest() != asset['sha256']:
+                raise ValueError(f'MANO asset differs from the task: {asset["name"]}')
+            (models / asset['name']).symlink_to(source)
+        # h2r-mano-v1: absolute rotations on the flat mean hand; mano_trans is the wrist position.
+        mano = MANO(temp, device=torch.device('cpu'), flat_hand_mean=True, center_idx=0)
+    if convention['left_shapedirs_x_mirrored']:
+        left, right = mano.left_mano_layer.th_shapedirs, mano.right_mano_layer.th_shapedirs
+        # As h2r_io.mano.model: the legacy left asset repeats the right hand's x shape directions.
+        if (left[:, 0] - right[:, 0]).abs().sum() < 1:
+            left[:, 0] *= -1
+    result = {'time_s': demo.time_s}
+    checks = {'python': platform.python_version(), 'native_tip_vertex_ids': NATIVE_TIPS,
               'versions': {n: version(n) for n in ('torch', 'numpy', 'scipy', 'manotorch')}}
-    for side in layout['hands']:
-        orient, fingers, trans = mano_parameters(reference, arrays, side)
+    for side, hand in demo.hands.items():
+        pose = Rotation.from_quat(hand.mano_quat.reshape(-1, 4)[:, [1, 2, 3, 0]]).as_rotvec().reshape(-1, 48)
         with torch.no_grad():
             decoded = mano.forward(side, *[torch.as_tensor(a, dtype=torch.float32) for a in
-                                          (arrays[f'{side}_mano_shape'], orient, trans, fingers)])
+                                          (hand.mano_shape, pose[:, :3], hand.mano_trans, pose[:, 3:])])
         joints = decoded['joints'].cpu().numpy()
-        differences = np.linalg.norm(joints - arrays[f'{side}_joints_m'][:, order], axis=-1)
-        tip_slots = [4, 8, 12, 16, 20]
-        error = float(np.max(np.delete(differences, tip_slots, axis=1)))
-        vertices_error = float(np.max(np.linalg.norm(
-            decoded['vertices'].cpu().numpy() - arrays[f'{side}_vertices_m'], axis=-1)))
+        differences = np.linalg.norm(joints - hand.joints_m[:, ORDER], axis=-1)
+        error = float(np.delete(differences, TIP_SLOTS, axis=1).max())
+        vertices_error = float(np.linalg.norm(decoded['vertices'].cpu().numpy() - hand.vertices_m, axis=-1).max())
         if max(error, vertices_error) > 1e-4:
             raise ValueError(f'{side} MANO geometry differs: joints={error}m, surface={vertices_error}m')
-        native_tips = [745, 317, 444 if side == 'right' else 445, 556, 673]
-        np.testing.assert_allclose(joints[:, tip_slots], arrays[f'{side}_vertices_m'][:, native_tips],
-                                   atol=1e-6, rtol=0)
         result[f'{side}_joints'] = joints
         result[f'{side}_joints_wxyz'] = decoded['joints_wxyz'].cpu().numpy()
-        checks[side] = dict(shared_joint_max_error_m=error, vertex_max_error_m=vertices_error,
-                            native_tip_vertex_ids=native_tips,
-                            native_vs_bench_tip_max_distance_m=float(differences[:, tip_slots].max()))
+        checks[side] = dict(mano_joint_max_error_m=error, vertex_max_error_m=vertices_error,
+                            native_vs_task_tip_max_distance_m=float(differences[:, TIP_SLOTS].max()))
     if any(not np.isfinite(v).all() for v in result.values()):
         raise ValueError('Nonfinite MANO features')
     np.savez_compressed(output / 'features.npz', **result)
@@ -85,6 +72,6 @@ def decode(bundle, mano_root, output):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'mano-root', 'output'):
+    for name in ('task', 'mano-root', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     decode(**vars(parser.parse_args()))

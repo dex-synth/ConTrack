@@ -8,7 +8,7 @@ import time
 import torch
 
 from .controller import Controller
-from .protocol import receive, send
+from .h2r_io.client import receive, send
 
 
 def main():

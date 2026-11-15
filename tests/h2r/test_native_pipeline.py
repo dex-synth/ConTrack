@@ -85,7 +85,7 @@ def h2r_reference(source):
                   part_pos=source['object_pos'], part_quat=source['object_quat_wxyz'],
                   contact=source['hand_is_contact'].transpose(1, 2),
                   contact_points=source['hand_contact_points'].transpose(1, 2))
-    return Reference({'layout': layout, 'task': {'dt_s': 1/120, 'control_ticks': 2}}, arrays, 'cpu')
+    return Reference(layout, arrays, 'cpu', 1/60)
 
 
 def test_reference_matches_native_control_grid():
@@ -177,7 +177,7 @@ def test_reset_velocity_coordinates(prepared):
             arrays['part_pos'][frame, p] = data.body(name).xpos
             arrays['part_quat'][frame, p] = data.body(name).xquat
     qpos, qvel, report = reset_reference(model, binding['layout'], arrays)
-    ref = Reference(binding, arrays, 'cpu', 1/60)
+    ref = Reference(binding['layout'], arrays, 'cpu', 1/60)
     expected_joint = linear_velocity(ref.data['robot_q'], 60).numpy()
     np.testing.assert_allclose(qvel[:, :3], expected_joint, atol=1e-7)
     np.testing.assert_allclose(qvel[:3, 0], [.3, .3, 0], atol=1e-7)
@@ -326,13 +326,13 @@ def test_legacy_artifacts_are_not_reinterpreted(prepared, tmp_path):
     from contrack_h2r.controller import Controller
     from contrack_h2r.inputs import digest, load_prepared, seal_prepared, write_json
     checkpoint = tmp_path / 'old.pt'
-    metadata = {'format': 'contrack-h2r-deployment-v1'}
+    metadata = {'format': 'contrack-h2r-deployment-v3'}
     torch.save({'infos': {'h2r': metadata}}, checkpoint)
     write_json(checkpoint.with_suffix('.json'), {**metadata, 'checkpoint_sha256': digest(checkpoint)})
-    with pytest.raises(ValueError, match='Legacy or unsupported checkpoint'):
+    with pytest.raises(ValueError, match='Unsupported checkpoint .contrack-h2r-deployment-v3.: retrain'):
         Controller(prepared, checkpoint)
     binding, _ = load_prepared(prepared)
-    binding['format'] = 'contrack-h2r-v1'
+    binding['format'] = 'contrack-h2r-v2'
     seal_prepared(prepared, {k: v for k, v in binding.items() if k not in ('files', 'prepared_id')})
-    with pytest.raises(ValueError, match='Legacy or unsupported preparation'):
+    with pytest.raises(ValueError, match="Unsupported preparation 'contrack-h2r-v2': rerun contrack_h2r.prepare"):
         load_prepared(prepared)

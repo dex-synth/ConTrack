@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from importlib.metadata import version
-from pathlib import Path
 
 import mujoco
 import mujoco_warp
@@ -24,7 +23,7 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 
 from rsl_rl_contrack.sharpa_recipe import CONTROL_HZ, NUM_ENVS, PHYSICS_HZ, PROVENANCE
 
-from .inputs import STATE_REFRESH, load_prepared
+from .inputs import STATE_REFRESH, load_prepared, prepared_task
 from .mjwarp_scene import Scene
 from .reference import Reference
 from .resets import ResetLibrary
@@ -39,11 +38,11 @@ class TaskState:
     rollout = None
     last_step = None
 
-    def __init__(self, env, prepared, binding, arrays):
+    def __init__(self, env, task, binding, arrays):
         self.env, self.binding = env, binding
-        self.layout, task = binding['layout'], binding['task']
+        self.layout = binding['layout']
         self.device, self.num_envs = env.device, env.num_envs
-        self.scene = Scene(Path(prepared) / 'task' / task['scene'], task, self.layout)
+        self.scene = Scene(task.scene_xml, self.layout)
         self.cpu_model = m = env.sim.mj_model
         self.data, self.model = env.sim.wp_data, env.sim.wp_model
         self.ctrl = env.sim.data.ctrl  # Create the shared bridge outside PPO's inference-mode scope.
@@ -61,7 +60,7 @@ class TaskState:
         self.audit = dict(backend='mujoco_warp', environment='mjlab', mjlab=version('mjlab'),
                           mujoco=mujoco.__version__, mujoco_warp=mujoco_warp.__version__,
                           warp=wp.__version__, torch=torch.__version__, gpu_checked=checked,
-                          timestep_s=self.dt, control_ticks=self.substeps, num_envs=self.num_envs,
+                          timestep_s=self.dt, control_dt_s=self.step_dt, num_envs=self.num_envs,
                           integrator=int(m.opt.integrator), solver=int(m.opt.solver), iterations=m.opt.iterations,
                           cone=int(m.opt.cone), impratio=m.opt.impratio,
                           contacts_per_world=env.cfg.sim.nconmax, constraints_per_world=env.cfg.sim.njmax,
@@ -69,9 +68,9 @@ class TaskState:
                           state_refresh=STATE_REFRESH,
                           contact_timing='last_physics_solve',
                           training_randomization='disabled (native default)', recipe=PROVENANCE,
-                          benchmark_duration_s=task['dt_s'] * task['end_tick'],
+                          benchmark_duration_s=task.duration_s,
                           declared_episode_length_s=env.cfg.episode_length_s)
-        self.reference = Reference(binding, arrays, self.device, self.step_dt)
+        self.reference = Reference(self.layout, arrays, self.device, self.step_dt)
         self.qids = torch.as_tensor(self.scene.qids, device=self.device)
         self.vids = torch.as_tensor(self.scene.vids, device=self.device)
         self.aids = torch.as_tensor(self.scene.aids, device=self.device)
@@ -305,20 +304,19 @@ class ConTrackEnv(ManagerBasedRlEnv):
 
     def __init__(self, prepared, num_envs=NUM_ENVS, device='cuda:0', contacts_per_world=512,
                  constraints_per_world=4096, *, physics_hz=PHYSICS_HZ, control_hz=CONTROL_HZ, seed=0):
-        self.prepared = Path(prepared)
         self.binding, self.arrays = load_prepared(prepared)
-        task = self.binding['task']
+        self.h2r_task = task = prepared_task(prepared, self.binding)
         if not np.isfinite([physics_hz, control_hz]).all() or min(physics_hz, control_hz) <= 0:
             raise ValueError('Training frequencies must be positive and finite')
         if control_hz != CONTROL_HZ:
             raise ValueError('The native Sharpa recipe requires 60 Hz policy control')
-        duration = task['dt_s'] * task['end_tick']
+        # Private training clocks: the task's nominal step is not the training step.
+        duration = task.duration_s
         decimation = round(physics_hz / control_hz)
         if (decimation < 1 or not np.isclose(decimation / physics_hz, 1 / control_hz, atol=1e-12, rtol=0)
                 or not np.isclose(round(duration * control_hz) / control_hz, duration, atol=1e-10, rtol=0)):
             raise ValueError('Task duration must contain complete training control intervals')
-        path = self.prepared / 'task' / task['scene']
-        source = mujoco.MjSpec.from_file(str(path))
+        source = mujoco.MjSpec.from_file(str(task.scene_xml))
         opt = source.option
 
         def attach_scene(spec):
@@ -338,7 +336,7 @@ class ConTrackEnv(ManagerBasedRlEnv):
         cfg = ManagerBasedRlEnvCfg(
             # Native config uses raw_len/raw_fps for its declared episode length;
             # the reference timeout separately includes the final action. Neither
-            # private training clock changes the benchmark end_tick.
+            # private training clock changes the benchmark duration.
             seed=seed, decimation=decimation,
             episode_length_s=duration + duration / (len(self.arrays['time_s']) - 1),
             scene=SceneCfg(num_envs=num_envs, env_spacing=0, spec_fn=attach_scene),
@@ -352,7 +350,7 @@ class ConTrackEnv(ManagerBasedRlEnv):
         super().__init__(cfg, device)
 
     def load_managers(self):
-        self.task_state = TaskState(self, self.prepared, self.binding, self.arrays)
+        self.task_state = TaskState(self, self.h2r_task, self.binding, self.arrays)
         super().load_managers()
 
 

@@ -148,14 +148,14 @@ vulkaninfo --summary
 
 ## H2R benchmark adaptation
 
-The standalone [`contrack_h2r`](docs/h2r.md) entry points read sealed h2r_bench
-bundles, generate Sharpa IK/contact references, train with MJLab/MuJoCo Warp and
+The standalone [`contrack_h2r`](docs/h2r.md) entry points read one sealed h2r_bench
+task package, generate Sharpa IK/contact references, train with MJLab/MuJoCo Warp and
 the existing PyTorch PPO/CMDP, and deploy a feedback controller to the independent
 benchmark evaluator. This task adaptation has its own Python 3.12 environment;
 the original Isaac Lab/PhysX entry points remain available. The public Sharpa
 recipe defaults to 6,000 environments, 60 Hz policy control, 120 Hz training
-physics, and 100,000 updates. Native behavior, known limitations, and v2 artifact
-compatibility are documented in the H2R guide.
+physics, and 100,000 updates. Native behavior, known limitations, and artifact
+formats are documented in the H2R guide.
 
 ## License
 
