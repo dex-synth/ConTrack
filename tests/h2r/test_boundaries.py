@@ -38,7 +38,7 @@ def test_task_package_is_the_only_input(prepared, tmp_path):
     old = tmp_path / 'old-task'
     old.mkdir()
     (old / 'task.json').write_text(json.dumps({'format': 'h2r-evaluation-v3', 'task_id': 'x', 'control_ticks': 5}))
-    with pytest.raises(ValueError, match='Unsupported or changed task'):
+    with pytest.raises(ValueError, match='Expected h2r-task-v1'):
         load_task(old)
     assert {'contrack_h2r/h2r_io/task.py', 'contrack_h2r/h2r_io/SOURCE.json'} <= implementation_hashes().keys()
 

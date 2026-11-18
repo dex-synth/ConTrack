@@ -32,7 +32,7 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
   --ik-python /opt/h2r/contrack-ik/ik/bin/python
 ```
 
-`h2r_io.load_task` 校验 task、demo、robot 的全部文件和身份；此前格式的 bundle／task 在此被拒绝（`Unsupported or changed task`）。机器人按 `robot.name`、`robot.hands` 和 semantics 判断：IK 与接触槽映射目前只有 `sharpa_wave`，其他手型明确拒绝；腕关节、手指关节和腕 body 取自 semantics，手的集合取自 task，因此双手、仅右手、仅左手使用同一段代码。物体按 `demo.objects` 遍历：每个自由根取其根部件的参考位姿，每个 hinge 取 `position_rad`，固定根不占广义坐标；多物体、铰接物体和额外的固定支撑不需要分支。四个数据集的包结构相同，没有按数据集区分的读取或配方。
+`h2r_io.load_task` 校验 task、demo、robot 的全部文件和身份；此前格式的 bundle／task 在此被拒绝（`Expected h2r-task-v1 in …`）。机器人按 `robot.name`、`robot.hands` 和 semantics 判断：IK 与接触槽映射目前只有 `sharpa_wave`，其他手型明确拒绝；腕关节、手指关节和腕 body 取自 semantics，手的集合取自 task，因此双手、仅右手、仅左手使用同一段代码。物体按 `demo.objects` 遍历：每个自由根取其根部件的参考位姿，每个 hinge 取 `position_rad`，固定根不占广义坐标；多物体、铰接物体和额外的固定支撑不需要分支。四个数据集的包结构相同，没有按数据集区分的读取或配方。
 
 方法准备包括：
 
@@ -109,11 +109,24 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.native_rollo
 
 `--initial-velocity reference` 使用训练 reset 的首帧参考速度，`zero` 对应 bench 的零初速。`summary.json` 记录各 world 的终止帧／原因、参考覆盖率和物体位置／角度误差，`rollout.npz` 保存逐控制步记录。GPU 接触求解不完全确定，多 world 会分叉，故分别报告。该诊断不替代 bench 的共同评估。
 
+## 方法内 rollout 的导出
+
+bench 在独立评估之外，还报告方法在自己训练所用仿真里的表现（`method-sim`，自报）。导出入口复用上面的原生闭环，不另写 rollout 循环：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.method_rollout \
+  --prepared /path/to/prepared --checkpoint /path/to/training/model_N.pt --output /path/to/new-method-rollout
+```
+
+10 个 world 从同一个评估初态开始（MJWarp 在 GPU 上不完全确定，各算一条）：机器人取评估客户端在 start 中提交的首帧姿态，物体取 task 的参考首帧，全部速度为零，没有 warm-up；导出时逐项核对首个状态（`1e-6`），不符即拒绝。物理为 checkpoint 记录的 MJLab／MJWarp 训练步长（默认 120 Hz）与 60 Hz 控制，运行时的 `mjlab`、`mujoco_warp` 版本须与训练时相同；动作为 `act_inference`，场景只有 task 的执行器，没有随机化、外力或课程更新，world 结束后的自动重置不在导出范围内。
+
+输出是 `h2r-method-rollout-v1` 包：每个物理步之后的机器人关节、物体自由根位姿和物体关节（首个状态为 0 s 的初态），方法身份和 `controller` 与评估客户端 start 中上报的相同。原生 pose-break 保留为方法自己的失败终止，该 world 的状态到此为止并记录 `ended_at_s`；原生闭环在参考末帧多执行的一个动作超出 task 时长，其状态不写入，但其间的 pose-break 仍计入判定。方法判定为“到达参考末帧且无 pose-break”，阈值取 checkpoint 中冻结的值。包由 bench 的 `import-method-rollout` 导入并用共同指标计分，见 h2r_bench 的 `docs/methods/contrack.md`。
+
 ## 代码与验证
 
 | 模块 | 职责 |
 | --- | --- |
-| `h2r_io/` | bench 的 task／suite 加载器与评估协议收发的副本，不修改 |
+| `h2r_io/` | bench 的 task／suite 加载器、评估协议收发与方法内 rollout 包读写的副本，不修改 |
 | `inputs.py`、`layout.py` | 方法产物的身份与封存、具名布局 |
 | `prepare.py`、`retarget.py`、`contacts.py` | 准备编排、隔离 IK 调用、穿透诊断、ConTrack 接触参考 |
 | `mano_features.py`、`ik_worker.py`、`_vendor/v2d/` | 原始 MANO／IK 及输入、模型、具名关节边界转换 |
@@ -125,6 +138,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.native_rollo
 | `policy.py` | checkpoint／JSON／prepared 身份核验与原 `ActorCritic` 构建，评估客户端与原生闭环共用 |
 | `controller.py`、`evaluate.py` | 无 simulator 的反馈控制与 Unix socket 客户端 |
 | `native_rollout.py` | 训练 setup 内首帧起始、冻结课程的确定性闭环诊断 |
+| `method_rollout.py` | 把零初速的原生闭环按物理步导出为 bench 的方法内 rollout 包 |
 
 ```bash
 /opt/h2r/contrack/bin/python -m pytest tests/h2r -q

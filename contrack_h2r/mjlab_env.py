@@ -37,6 +37,8 @@ class TaskState:
     # training keeps None, i.e. adaptive start sampling and library updates.
     rollout = None
     last_step = None
+    # A list collects qpos after every physics step (native_rollout physics_states); training keeps None.
+    physics_qpos = None
 
     def __init__(self, env, task, binding, arrays):
         self.env, self.binding = env, binding
@@ -293,6 +295,8 @@ def reset_reference(env, env_ids):
 
 def capacity_health(env):
     task, data = env.task_state, env.sim.wp_data
+    if task.physics_qpos is not None:  # This per-substep term runs right after each physics step.
+        task.physics_qpos.append(task.tensor(data, 'qpos').clone())
     overflow = ((task.tensor(data, 'nacon')[0] > data.naconmax)
                 | (task.tensor(data, 'nefc') > data.njmax) | (task.tensor(data, 'overflow') != 0))
     task.capacity_overflow.logical_or_(overflow)

@@ -243,9 +243,61 @@ def test_native_rollout_starts_at_first_frame_with_frozen_library(prepared, tmp_
         summary, arrays = rollout(prepared, checkpoint, num_envs=2, initial_velocity=velocity)
         assert summary['checkpoint']['completed_iterations'] == 1
         frames = arrays['frame']
+        assert 'physics_qpos' not in arrays  # Only the method rollout export asks for physics-step states.
         assert (frames[:, 0] == np.arange(len(frames))).all()  # Fixed clock from the first frame.
         world = summary['worlds'][0]
         assert world['reason'] in ('pose_break', 'reference_end') and world['end_frame'] == len(frames) - 1
         ema = float(saved['success_ema'])
         weight = min(max((ema - 0.9) / (0.999 - 0.9), 0), 1)
         assert summary['termination']['threshold_m'] == pytest.approx(0.1 - 0.05 * weight)
+
+
+def test_method_rollout_exports_every_physics_step_from_the_evaluation_start(prepared, tmp_path, monkeypatch):
+    from contrack_h2r import method_rollout
+    from contrack_h2r.h2r_io.method_rollout import CONDITIONS, load_method_rollout
+    wrapped = make_env(prepared, num_envs=2)
+    output = tmp_path / 'train'
+    output.mkdir()
+    cfg = training_config()
+    cfg['algorithm'].update(num_learning_epochs=1, num_mini_batches=1)
+    runner = H2RRunner(wrapped, cfg, output, 0)
+    runner.learn(1)
+    runner.writer.close()
+    wrapped.close()
+    checkpoint = output / 'model_0.pt'
+    native_rollout, native = method_rollout.rollout, {}
+
+    def rollout(*args, **kwargs):
+        native['summary'], native['arrays'] = result = native_rollout(*args, **kwargs)
+        return result
+
+    monkeypatch.setattr(method_rollout, 'rollout', rollout)
+    package = method_rollout.export(prepared, checkpoint, tmp_path / 'package', num_envs=2)
+    controller = Controller(prepared, checkpoint)
+    task = method_rollout.prepared_task(prepared, controller.binding)
+    manifest, episodes = load_method_rollout(package, task)
+    hello = dict(type='hello', protocol='h2r-evaluation-v2', dt_s=1/300, end_tick=30, task_id=task.task_id,
+                 demo_id=task.demo.demo_id, robot_id=task.robot.robot_id, joint_names=manifest['joint_names'],
+                 observation={'contacts': True}, episodes=[{'episode_id': '0'}])
+    start = controller.start(hello)
+    # The same method identity and deployed checkpoint as the evaluation client reports.
+    assert manifest['binding'] == start['binding']
+    assert manifest['conditions'] == CONDITIONS and manifest['training_seed'] == 0
+    simulator = manifest['simulator']
+    assert (simulator['physics_dt_s'], simulator['control_dt_s'], simulator['deterministic']) == (1/120, 1/60, False)
+    steps = 12  # 0.1 s of task at 120 Hz; the native terminal action lies beyond it
+    assert len(episodes) == 2
+    for i, (states, entry, world) in enumerate(zip(episodes, manifest['episodes'], native['summary']['worlds'])):
+        verdict, count = entry['verdict'], len(states['time_s']) - 1
+        np.testing.assert_allclose(states['time_s'], np.arange(count + 1) / 120)
+        assert count == min(2 * (world['end_frame'] + 1), steps)
+        assert verdict['ended_at_s'] == (count / 120 if count < steps else None)
+        assert verdict['success'] == (world['reason'] == 'reference_end')
+        # The evaluation initial state: the pose proposed in start, objects at the first reference frame.
+        proposed = start['initial_robot']['0']
+        np.testing.assert_allclose(states['robot_q'][0], [proposed[n] for n in manifest['joint_names']], atol=1e-6)
+        np.testing.assert_allclose(states['object_root_poses'][0, 0],
+                                   task.initial_object_state['object_roots']['box'], atol=1e-6)
+        np.testing.assert_allclose(states['object_q'][0], [0], atol=1e-6)
+        # Every second physics state is the state the native rollout scored at that control step.
+        np.testing.assert_array_equal(states['robot_q'][2::2], native['arrays']['robot_q'][:count // 2, i])

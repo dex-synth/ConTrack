@@ -21,7 +21,13 @@ from .policy import Checkpoint
 
 
 def rollout(prepared, checkpoint, *, num_envs=1, device='cuda:0', initial_velocity='reference',
-            contacts_per_world=512, constraints_per_world=4096):
+            contacts_per_world=512, constraints_per_world=4096, physics_states=False):
+    """Summary and per-control-step arrays of the rollout.
+
+    `physics_states` adds `physics_qpos` (1 + control steps x substeps, worlds, nq): the initial
+    state, then qpos after every physics step. A finished world restarts and its later rows are not
+    part of its rollout.
+    """
     binding, _ = load_prepared(prepared)
     model = Checkpoint(checkpoint, binding, device)
     physics = model.metadata['training_physics']
@@ -34,6 +40,8 @@ def rollout(prepared, checkpoint, *, num_envs=1, device='cuda:0', initial_veloci
         task.library.load_state_dict(model.saved['infos']['reset_library'])
         task.rollout = {'start': 0, 'velocity': initial_velocity}
         env.unwrapped.reset()
+        if physics_states:
+            task.physics_qpos = [task.tensor(task.data, 'qpos').clone()]
         observations = env.get_observations()
         policy = model.policy(observations)
         length = len(task.clock)
@@ -56,6 +64,8 @@ def rollout(prepared, checkpoint, *, num_envs=1, device='cuda:0', initial_veloci
             if not active.any():
                 break
         arrays = {k: np.stack([s[k] for s in steps]) for k in steps[0]}
+        if physics_states:
+            arrays['physics_qpos'] = torch.stack(task.physics_qpos).cpu().numpy()
         thresholds = [float(v) for v in task.library.thresholds()]
     finally:
         env.close()
