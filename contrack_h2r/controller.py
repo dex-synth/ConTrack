@@ -1,9 +1,9 @@
 """Complete feedback controller; deliberately imports no simulator."""
 
+from h2r_io import client
 import numpy as np
 import torch
 
-from .h2r_io import client
 from .inputs import load_prepared
 from .policy import Checkpoint
 from .reference import Reference

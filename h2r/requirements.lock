@@ -28,6 +28,7 @@ glfw==2.11.0
 googleapis-common-protos==1.76.0
 grpcio==1.85.1
 h11==0.16.0
+h2r-io @ git+ssh://git@github.com/dex-synth/h2r_bench.git@h2r-io-v1#subdirectory=packages/h2r-io
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.20

@@ -3,6 +3,7 @@ chumpy @ https://github.com/mattloper/chumpy/archive/580566eafc9ac68b2614b64d6f7
 deprecation==2.1.0
 filelock==3.32.3
 fsspec==2026.7.0
+h2r-io @ git+ssh://git@github.com/dex-synth/h2r_bench.git@h2r-io-v1#subdirectory=packages/h2r-io
 Jinja2==3.1.6
 manotorch @ https://github.com/lixiny/manotorch/archive/a2a70c591f91551078b7bb2af9b5d9f275b626e0.tar.gz#sha256=38beea246546fddda0128dfbbe297bfc2df6f4b7999ef45c338e1a6b6b52b94a
 MarkupSafe==3.0.3

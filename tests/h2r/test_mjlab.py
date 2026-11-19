@@ -254,7 +254,7 @@ def test_native_rollout_starts_at_first_frame_with_frozen_library(prepared, tmp_
 
 def test_method_rollout_exports_every_physics_step_from_the_evaluation_start(prepared, tmp_path, monkeypatch):
     from contrack_h2r import method_rollout
-    from contrack_h2r.h2r_io.method_rollout import CONDITIONS, load_method_rollout
+    from h2r_io.method_rollout import CONDITIONS, load_method_rollout
     wrapped = make_env(prepared, num_envs=2)
     output = tmp_path / 'train'
     output.mkdir()

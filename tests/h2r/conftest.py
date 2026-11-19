@@ -1,10 +1,10 @@
 import json
 
+from h2r_io import demo as demo_io, robot as robot_io, task as task_io
 import mujoco
 import numpy as np
 import pytest
 
-from contrack_h2r.h2r_io import demo as demo_io, robot as robot_io, task as task_io
 from contrack_h2r.inputs import PREPARED_FORMAT, seal_prepared
 from contrack_h2r.reset_reference import reset_reference
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
@@ -29,7 +29,7 @@ LAYOUT = dict(hands=['right'], joint_names=['x', 'yaw', 'finger'], joint_units=[
 
 
 def write_task(root, reference_hz=30., frames=4):
-    """Seal a standalone toy task with the vendored loader; returns the loaded Task."""
+    """Seal a standalone toy task with h2r_io; returns the loaded Task."""
     demo, robot = root / 'demo', root / 'robot'
     demo.mkdir(parents=True)
     robot.mkdir()

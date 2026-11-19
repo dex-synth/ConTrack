@@ -5,10 +5,10 @@ from pathlib import Path
 import socket
 import time
 
+from h2r_io.client import receive, send
 import torch
 
 from .controller import Controller
-from .h2r_io.client import receive, send
 
 
 def main():

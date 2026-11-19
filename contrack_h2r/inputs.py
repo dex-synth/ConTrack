@@ -4,11 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 
+from h2r_io import load_task
 import numpy as np
 
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
-
-from .h2r_io import load_task
 
 # v3: prepared from one task package (h2r-task-v1) and bound to task_id, demo_id and robot_id.
 PREPARED_FORMAT = 'contrack-h2r-v3'
@@ -39,9 +38,10 @@ def write_json(path, value):
 def implementation_hashes():
     root = Path(__file__).resolve().parents[1]
     files = {p for package in ('contrack_h2r', 'rsl_rl_contrack') for p in (root / package).rglob('*.py')}
-    # Copied sources are bound whole: the frozen IK and the benchmark loader, with their SOURCE.json.
-    files.update(p for name in ('_vendor', 'h2r_io') for p in (root / 'contrack_h2r' / name).rglob('*')
+    # The copied frozen IK is bound whole, with its SOURCE.json.
+    files.update(p for p in (root / 'contrack_h2r' / '_vendor').rglob('*')
                  if p.is_file() and '__pycache__' not in p.parts)
+    # The locks pin every installed dependency, the benchmark loader h2r-io among them.
     files.update((root / 'h2r').glob('*requirements.lock'))
     return {str(p.relative_to(root)): digest(p) for p in sorted(files)}
 

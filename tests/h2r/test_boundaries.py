@@ -1,9 +1,9 @@
 import json
 
+from h2r_io import load_task
 import pytest
 import torch
 
-from contrack_h2r.h2r_io import load_task
 from contrack_h2r.inputs import implementation_hashes, load_prepared, local_file, prepared_task
 from contrack_h2r.layout import make_layout
 from contrack_h2r.mjwarp_scene import Scene
@@ -40,7 +40,7 @@ def test_task_package_is_the_only_input(prepared, tmp_path):
     (old / 'task.json').write_text(json.dumps({'format': 'h2r-evaluation-v3', 'task_id': 'x', 'control_ticks': 5}))
     with pytest.raises(ValueError, match='Expected h2r-task-v1'):
         load_task(old)
-    assert {'contrack_h2r/h2r_io/task.py', 'contrack_h2r/h2r_io/SOURCE.json'} <= implementation_hashes().keys()
+    assert 'h2r/requirements.lock' in implementation_hashes()
 
 
 def test_reference_must_fill_whole_policy_periods(tmp_path):

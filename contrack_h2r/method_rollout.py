@@ -13,12 +13,12 @@ import argparse
 from importlib.metadata import version
 from pathlib import Path
 
+from h2r_io.method_rollout import state_names, write_method_rollout
 import mujoco
 import mujoco_warp
 import numpy as np
 
 from .controller import METHOD
-from .h2r_io.method_rollout import state_names, write_method_rollout
 from .inputs import load_prepared, prepared_task, read_json
 from .native_rollout import rollout
 

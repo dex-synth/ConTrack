@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import xml.etree.ElementTree as ET
 
+from h2r_io import load_task
 import mujoco
 import numpy as np
 
@@ -18,8 +19,6 @@ from flash_chord.h2r.wrist import wrist_coordinates
 from robotic_grounding.retarget import SHARPA_WAVE_XMLS_DIR
 from robotic_grounding.retarget.hand_kinematics import SharpaHandKinematics
 from robotic_grounding.retarget.retarget_utils import wrist_pose_from_mano_joint0
-
-from .h2r_io import load_task
 
 
 def prepare_models(package, output):

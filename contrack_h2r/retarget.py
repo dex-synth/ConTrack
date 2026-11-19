@@ -27,7 +27,7 @@ def run_worker(python, module, *arguments):
 
 
 def retarget(scene, task, qpos, *, output, mano_root, loader_python, ik_python):
-    """Both workers read the task through the vendored loader, in their own environments."""
+    """Both workers read the task through h2r_io, in their own environments."""
     source = read_json(VENDOR / 'SOURCE.json')
     check_files(VENDOR, {name: item['sha256'] for name, item in source['files'].items()})
     output = Path(output)

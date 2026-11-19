@@ -13,10 +13,9 @@ from pathlib import Path
 import platform
 import tempfile
 
+from h2r_io import load_task
 import numpy as np
 from scipy.spatial.transform import Rotation
-
-from .h2r_io import load_task
 
 # Decoder joint order (wrist, then thumb..pinky with their tips) as indices into the task's joints_m.
 ORDER = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]

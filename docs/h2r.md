@@ -14,7 +14,7 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 /opt/h2r/contrack/bin/python -m contrack_h2r.prepare --help
 ```
 
-输入只有 h2r_bench 的 task 目录（`h2r-task-v1`，可以是 suite 内的 task 或独立打包的 task），由仓库内复制的加载器 [`contrack_h2r/h2r_io/`](../contrack_h2r/h2r_io/SOURCE.json) 读取；该目录由 bench 的 `export-loader` 生成，不手工修改，计入源码 hash，用 `h2r-bench check-loader contrack_h2r/h2r_io` 核对版本。主进程和两个准备子进程都经它读取 task。
+输入只有 h2r_bench 的 task 目录（`h2r-task-v1`，可以是 suite 内的 task 或独立打包的 task），由 bench 发布的加载器 `h2r_io`（依赖包 `h2r-io`）读取。三个锁文件都固定 h2r_bench 的 tag `h2r-io-v1`（`ssh://git@github.com/dex-synth/h2r_bench.git`，子目录 `packages/h2r-io`），锁文件计入源码 hash。主进程和两个准备子进程都经它读取 task。
 
 `h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 MJLab 1.6.0、PyTorch 2.9.0 CUDA 12.8、MuJoCo／MJWarp 3.11.0、Warp 1.16.0。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
 
@@ -126,7 +126,6 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.method_rollo
 
 | 模块 | 职责 |
 | --- | --- |
-| `h2r_io/` | bench 的 task／suite 加载器、评估协议收发与方法内 rollout 包读写的副本，不修改 |
 | `inputs.py`、`layout.py` | 方法产物的身份与封存、具名布局 |
 | `prepare.py`、`retarget.py`、`contacts.py` | 准备编排、隔离 IK 调用、穿透诊断、ConTrack 接触参考 |
 | `mano_features.py`、`ik_worker.py`、`_vendor/v2d/` | 原始 MANO／IK 及输入、模型、具名关节边界转换 |

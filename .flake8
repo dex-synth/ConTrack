@@ -15,7 +15,7 @@ per-file-ignores=*/__init__.py:F401
 ignore=E402,E501,W503,E203,D401,R504,R505,SIM102,SIM117,SIM118
 max-line-length = 120
 max-complexity = 30
-exclude=_*,.vscode,.git,docs/**,contrack_h2r/h2r_io
+exclude=_*,.vscode,.git,docs/**
 # docstrings
 docstring-convention=google
 # annotations

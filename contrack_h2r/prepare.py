@@ -5,11 +5,11 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from h2r_io import export_task, load_task
 import mujoco
 import numpy as np
 
 from .contacts import DEFAULT_CONTACT_DISTANCE_M, reference_contacts
-from .h2r_io import export_task, load_task
 from .inputs import PREPARED_FORMAT, implementation_hashes, seal_prepared, write_json
 from .layout import make_layout
 from .mjwarp_scene import Scene

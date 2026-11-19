@@ -12,7 +12,7 @@
 
 | 项目 | original | H2R |
 | --- | --- | --- |
-| 输入 | HDF5：机器人 qpos、物体轨迹／网格、接触标注 | 一个 h2r_bench task 目录（demo、robot 与装配后的场景）；经复制的 `h2r_io` 加载器校验身份和全部文件 |
+| 输入 | HDF5：机器人 qpos、物体轨迹／网格、接触标注 | 一个 h2r_bench task 目录（demo、robot 与装配后的场景）；经 bench 的加载器 `h2r_io`（依赖包 `h2r-io`）校验身份和全部文件 |
 | 运动学参考 | 读取 HDF5 中已生成的机器人 qpos；生成链未公开 | 从 MANO 生成参考，使用固定的 FlashCHORD／V2D Sharpa IK；具体参数见第 5 节 |
 | 参考接触生成 | 读取 HDF5 的 15 段标注；生成参数未公开 | MANO 顶点按最近指骨分为 15 段，距物体表面 ≤ **5 mm** 的点参与局部接触点均值 |
 | 15 段 → 10 槽 | 每指 proximal 单独一槽，middle＋distal 合并一槽；标志取 OR，点取有效段均值 | 一致 |
