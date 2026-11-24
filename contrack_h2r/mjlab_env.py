@@ -39,13 +39,13 @@ CAPACITY_OVERFLOW = int(mujoco_warp.OverflowType.ALL
 
 
 def package_source(name):
-    """Version plus the VCS commit of a direct (unreleased) install; MJLab main reuses release versions."""
+    """Version plus the VCS commit of a direct (unreleased) install; MJLab main reuses release versions.
+
+    The install URL is left out: the same commit fetched over SSH or HTTPS is the same source.
+    """
     dist = distribution(name)
-    direct = json.loads(dist.read_text('direct_url.json') or 'null')
-    if direct is None:
-        return {'version': dist.version}
-    return {'version': dist.version, 'url': direct['url'],
-            'commit': direct.get('vcs_info', {}).get('commit_id')}
+    direct = json.loads(dist.read_text('direct_url.json') or '{}')
+    return {'version': dist.version, 'commit': direct.get('vcs_info', {}).get('commit_id')}
 
 
 class TaskState:
