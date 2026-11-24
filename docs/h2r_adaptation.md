@@ -42,7 +42,7 @@
 | 训练物理频率 | `120 Hz`，`dt=1/120 s` | 一致；由训练入口显式设置，不继承 task 的 300 Hz 名义步长 |
 | 策略频率／decimation | `60 Hz`／`2` | 一致 |
 | 频率可配置范围 | 选定配方固定上述频率 | 策略固定 `60 Hz`；物理频率可显式设为其整数倍，默认不变；任务时长须覆盖整数个控制区间 |
-| 重力／求解器 | 重力 `(0,0,-9.81)`；PhysX，环境最小位置／速度迭代 `2/2`，机器人迭代 `16/0` | 重力、solver、integrator、iterations 等继承 task MJCF；只在训练副本中设置方法物理步长 |
+| 重力／求解器 | 重力 `(0,0,-9.81)`；PhysX，环境最小位置／速度迭代 `2/2`，机器人迭代 `16/0` | 重力、solver、integrator、iterations 等全部 option 继承 task MJCF；训练副本只改方法物理步长，其余 option 逐项核对 |
 | 批量环境布局 | 环境间距 `2 m` | 独立 MJWarp worlds，`env_spacing=0` |
 | 接触／约束容量 | 每 sensor prim 接触容量 `32 × max(1, 物体数)`；PhysX rigid patch 容量 `2^19` | 每 world 默认 `contacts=512`、`constraints=4096`；可显式增大，溢出报错；与 PhysX 容量口径不同 |
 | 实际接触反馈 | PhysX `ContactSensor` 的接触标志／点 | MuJoCo 有效 manifold；训练按物体局部坐标平均接触中点，固定 distal pads 归入 DP 槽；桌面不占物体接触槽 |
@@ -118,7 +118,7 @@ ConTrack original 未公开 HDF5 的 IK／接触生成链，以下不能标为�
 | IK 位置／朝向 cost | 未公开，无法核对 | 腕 `(0.2,0.2)`；拇指尖 `(1,0.05)`；食／中／无名指尖 `(1,0.1)`；小指尖 `(0.5,0.1)`；启用的中间指节目标 `(0.1,0)` |
 | IK 初始化／后处理 | 未公开，无法核对 | 保留固定 V2D 首帧初始化、上一帧 warm start；自由腕解转换为连续六关节腕；不追加平滑或碰撞优化 |
 | 参考接触阈值 | 未公开，无法核对 | 默认 `0.005 m`；15 段→10 槽合并规则见第 1 节 |
-| 主环境 | Python `3.11`、PyTorch `2.7.0`、Isaac Sim `5.1.0`、Isaac Lab `42e61645` | Python `3.12`、PyTorch `2.9.0` CUDA `12.8`、MJLab `1.6.0`、MuJoCo／MJWarp `3.11.0`、Warp `1.16.0` |
+| 主环境 | Python `3.11`、PyTorch `2.7.0`、Isaac Sim `5.1.0`、Isaac Lab `42e61645` | Python `3.12`、PyTorch `2.9.0` CUDA `12.8`、MJLab `main` commit `1f480018`（自报 `1.6.0`）、MuJoCo／MJWarp `4.0.1`、Warp `1.16.0`；MuJoCo 3.11 的版本见分支 `mj3` |
 | 准备环境 | 无公开独立配方 | MANO：Python `3.10`；IK：Python `3.11`、Pinocchio `3.7.0`、Pink `4.2.0`、DAQP `0.10.3`；与训练进程隔离 |
 
 依据：[IK 配方](../contrack_h2r/retarget.py)、[IK 权重](../contrack_h2r/_vendor/v2d/robotic_grounding/retarget/params.py)、[主环境锁文件](../h2r/requirements.lock)、[IK 锁文件](../h2r/ik-requirements.lock)、[MANO 锁文件](../h2r/mano-requirements.lock)。

@@ -16,7 +16,7 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 
 输入只有 h2r_bench 的 task 目录（`h2r-task-v1`，可以是 suite 内的 task 或独立打包的 task），由 bench 发布的加载器 `h2r_io`（依赖包 `h2r-io`）读取。三个锁文件都固定 h2r_bench 的 tag `h2r-io-v1`（`ssh://git@github.com/dex-synth/h2r_bench.git`，子目录 `packages/h2r-io`），锁文件计入源码 hash。主进程和两个准备子进程都经它读取 task。
 
-`h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 MJLab 1.6.0、PyTorch 2.9.0 CUDA 12.8、MuJoCo／MJWarp 3.11.0、Warp 1.16.0。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
+`h2r/requirements.lock` 固定 Python 3.12 环境的依赖，含 MuJoCo／MJWarp 4.0.1、MJLab、PyTorch 2.9.0 CUDA 12.8、Warp 1.16.0、rsl-rl-lib 5.5.2。MJLab 尚无支持 MuJoCo 4 的正式版，锁文件以 git commit 固定其 `main`（`1f48001802bd89257537c2dc16979d41b9686e86`，SSH 源）；该 commit 声明 `torch>=2.14`，本环境有意保留与 h2r_bench 相同的 PyTorch 2.9.0，测试与 MuJoCo 4 suite 上的端到端检查均在此组合下进行。MuJoCo 3.11 的环境与代码保留在分支 `mj3`。训练使用 CUDA；准备和在线推理可在 CPU 执行。Python 3.12 也满足现有 runner 的 f-string 语法。按实际驱动选择设备；只设置当前进程的 `CUDA_VISIBLE_DEVICES`，不要改变其他方法的环境。
 
 原始 MANO 解码运行于独立 Python 3.10 环境，原始 IK 运行于 Python 3.11（Pinocchio 3.7.0、Pink 4.2.0、DAQP 0.10.3）。`mano-requirements.lock` 和 `ik-requirements.lock` 固定依赖；`manotorch` 和 `chumpy` 固定源码提交与压缩包 hash。它们通过文件与主准备进程交接，训练和在线推理不导入这些包。复制的源码位于本仓库内，不需要安装完整 V2D、FlashCHORD 或 Isaac Lab。
 
@@ -33,6 +33,8 @@ bash scripts/h2r_ik_environments.sh /opt/h2r/contrack-ik
 ```
 
 `h2r_io.load_task` 校验 task、demo、robot 的全部文件和身份；此前格式的 bundle／task 在此被拒绝（`Expected h2r-task-v1 in …`）。机器人按 `robot.name`、`robot.hands` 和 semantics 判断：IK 与接触槽映射目前只有 `sharpa_wave`，其他手型明确拒绝；腕关节、手指关节和腕 body 取自 semantics，手的集合取自 task，因此双手、仅右手、仅左手使用同一段代码。物体按 `demo.objects` 遍历：每个自由根取其根部件的参考位姿，每个 hinge 取 `position_rad`，固定根不占广义坐标；多物体、铰接物体和额外的固定支撑不需要分支。四个数据集的包结构相同，没有按数据集区分的读取或配方。
+
+task 的 `compiled.json` 记录编译它的 MuJoCo 版本。`prepare` 和训练要求它与运行时版本相同，训练还要求 prepared 由同一版本生成：旧版本编译的 task 在新版本中仍能载入，但带着旧版本的执行器等编译参数，因此明确拒绝，须使用 bench 为当前版本生成的 task 重新准备。共同 MJCF 的执行器须是每个关节一个、无延迟的位置输入（MuJoCo 4 的 `ctrladr`、`ctrlnum`、`input`、`delay` 逐项核对）。
 
 方法准备包括：
 
@@ -73,13 +75,13 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.train \
 
 默认路径保留两项原生限制：速度历史缓存只在 reset 时更新（原生 indexed `copy_` 不写回），空 episode return 窗口触发原生 `ZeroDivisionError`。PPO 文件已恢复为 `f5efe18` 原实现；不再隐式启用 empty-return guard 或逐步更新速度缓存的变体。失败按实际原因记录，不能暗改预算或 reset 来消除。
 
-GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512、约束容量 4096，可通过 `--contacts-per-world`／`--constraints-per-world` 显式增大，溢出直接报错。MJLab 原生捕获 step／forward／reset 的 CUDA graph。每个物理子步通过 metrics term 在 GPU 累积容量溢出标志，控制步结束统一检查；真实接触统计和奖励留在任务层。
+GPU 参数回读报告保存在训练目录。默认每 world 接触容量 512、约束容量 4096，可通过 `--contacts-per-world`／`--constraints-per-world` 显式增大，溢出直接报错。MJWarp 4 在 `Data.overflow` 中同时标记求解器和 line search 达到迭代上限；这是共同求解器设置（task MJCF 的 `iterations`）的正常结果，不计为容量溢出，只有容量位报错。MJLab 原生捕获 step／forward／reset 的 CUDA graph。每个物理子步通过 metrics term 在 GPU 累积容量溢出标志，控制步结束统一检查；真实接触统计和奖励留在任务层。
 
 每个控制步只保留 MJLab 尾部的一次完整 `forward`，用于可能发生的 reset 后刷新。`TaskState.finish_step()` 先提取最后求解时的局部接触点，再通过独立 CUDA graph 执行 `kinematics`、`com_pos`、`com_vel`，为奖励／终止提供当前 qpos/qvel 对应的 body 姿态和速度。轻量刷新不执行碰撞／约束求解，不写入动力学结果或 warmstart；非 graph 路径执行相同三个操作。接触相对积分后状态差一个物理子步，默认 8.33 ms，与最后 solve 的观测语义一致，不额外延迟一个 60 Hz 控制步。初始化和显式 reset 仍由 MJLab 完整刷新。`training_physics.json` 记录 `state_refresh` 与 `contact_timing`。
 
 训练与评估物理频率可以不同。评估步长只从 `hello.dt_s` 得知（默认 300 Hz）；客户端以 `control_dt_s = 1/60` 声明 checkpoint 的策略周期，它不是评估步长的整数倍时 start 被拒绝，不改变策略频率。未来参考间隔来自 checkpoint 的训练时钟，源轨迹与计分时间仍由共同 task 决定。
 
-部署格式为 `contrack-h2r-deployment-v4`：绑定 `prepared_id`、`task_id`、`demo_id`、`robot_id`，策略周期以秒保存（`training_physics.control_dt_s`），不保存 tick 数。每控制步只刷新运动学的实现仍由必有字段 `training_physics.state_refresh` 标识，不同刷新实现训练的 checkpoint 不混用。每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训核验环境、训练频率和并行规模，恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。此前格式的产物没有兼容读取：v2 及更早的 prepared、v3 及更早的 checkpoint 被明确拒绝，须从 task 目录重新 prepare 和 train。
+部署格式为 `contrack-h2r-deployment-v4`：绑定 `prepared_id`、`task_id`、`demo_id`、`robot_id`，策略周期以秒保存（`training_physics.control_dt_s`），不保存 tick 数。每控制步只刷新运动学的实现仍由必有字段 `training_physics.state_refresh` 标识，不同刷新实现训练的 checkpoint 不混用。每个 `model_N.pt` 对应一个 `model_N.json`，包含 checkpoint hash、输入身份、观测／动作布局、normalizer 配方、训练配置和源码 hash；normalizer 数值随模型保存。checkpoint 同时保留 optimizer、CMDP、自适应库、课程与 RNG。续训核验环境、simulator（MuJoCo、MJWarp 版本与 MJLab 源 commit）、训练频率和并行规模，恢复学习状态并开始新的训练 episodes，不承诺恢复同一时刻的所有仿真缓存。仅加载自己生成或信任的 PyTorch checkpoint。此前格式的产物没有兼容读取：v2 及更早的 prepared、v3 及更早的 checkpoint 被明确拒绝，须从 task 目录重新 prepare 和 train。
 
 `training_physics.json` 记录共同终点、方法声明的 episode 时长、首帧起训练动作数与实际物理参数。`run_config.json` 保存有效启动参数、预算 override、原生随机 episode-length 初始化及日志差异；`timing.json` 保存环境初始化、训练耗时、更新尝试数和实际控制／物理步数。6000 环境的开销须实际测量，不沿用旧 4096 环境的耗时。
 
@@ -118,7 +120,7 @@ CUDA_VISIBLE_DEVICES=0 /opt/h2r/contrack/bin/python -m contrack_h2r.method_rollo
   --prepared /path/to/prepared --checkpoint /path/to/training/model_N.pt --output /path/to/new-method-rollout
 ```
 
-10 个 world 从同一个评估初态开始（MJWarp 在 GPU 上不完全确定，各算一条）：机器人取评估客户端在 start 中提交的首帧姿态，物体取 task 的参考首帧，全部速度为零，没有 warm-up；导出时逐项核对首个状态（`1e-6`），不符即拒绝。物理为 checkpoint 记录的 MJLab／MJWarp 训练步长（默认 120 Hz）与 60 Hz 控制，运行时的 `mjlab`、`mujoco_warp` 版本须与训练时相同；动作为 `act_inference`，场景只有 task 的执行器，没有随机化、外力或课程更新，world 结束后的自动重置不在导出范围内。
+10 个 world 从同一个评估初态开始（MJWarp 在 GPU 上不完全确定，各算一条）：机器人取评估客户端在 start 中提交的首帧姿态，物体取 task 的参考首帧，全部速度为零，没有 warm-up；导出时逐项核对首个状态（`1e-6`），不符即拒绝。物理为 checkpoint 记录的 MJLab／MJWarp 训练步长（默认 120 Hz）与 60 Hz 控制，运行时的 MuJoCo、MJWarp 版本和 MJLab 源（commit）须与训练时相同；动作为 `act_inference`，场景只有 task 的执行器，没有随机化、外力或课程更新，world 结束后的自动重置不在导出范围内。
 
 输出是 `h2r-method-rollout-v1` 包：每个物理步之后的机器人关节、物体自由根位姿和物体关节（首个状态为 0 s 的初态），方法身份和 `controller` 与评估客户端 start 中上报的相同。原生 pose-break 保留为方法自己的失败终止，该 world 的状态到此为止并记录 `ended_at_s`；原生闭环在参考末帧多执行的一个动作超出 task 时长，其状态不写入，但其间的 pose-break 仍计入判定。方法判定为“到达参考末帧且无 pose-break”，阈值取 checkpoint 中冻结的值。包由 bench 的 `import-method-rollout` 导入并用共同指标计分，见 h2r_bench 的 `docs/methods/contrack.md`。
 
