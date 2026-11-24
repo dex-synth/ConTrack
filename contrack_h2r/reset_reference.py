@@ -32,7 +32,8 @@ def reset_reference(model, layout, arrays):
     qvel = np.zeros((len(qpos), model.nv))
     scalar_velocity = linear_velocity(torch.from_numpy(qpos).float(), CONTROL_HZ).numpy()
     for j, kind in enumerate(model.jnt_type):
-        if kind in (mujoco.mjtJoint.mjJNT_SLIDE, mujoco.mjtJoint.mjJNT_HINGE):
+        # MuJoCo 4 enums do not equal NumPy integers from the left side, as `in` compares them.
+        if int(kind) in (mujoco.mjtJoint.mjJNT_SLIDE, mujoco.mjtJoint.mjJNT_HINGE):
             qvel[:, model.jnt_dofadr[j]] = scalar_velocity[:, model.jnt_qposadr[j]]
 
     part_ids = [model.body(name).id for name in layout['part_bodies']]

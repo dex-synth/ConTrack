@@ -1,6 +1,7 @@
 import os
 
 import mujoco
+import mujoco_warp
 import numpy as np
 import pytest
 import torch
@@ -145,7 +146,12 @@ def test_transient_substep_overflow_is_not_lost(prepared):
     wrapped = make_env(prepared, num_envs=2)
     env = wrapped.unwrapped
     task = env.task_state
-    task.tensor(task.data, 'overflow')[1] = 1
+    # Reaching the solver or line-search iteration limit is not a capacity overflow.
+    limits = int(mujoco_warp.OverflowType.ITERATIONS | mujoco_warp.OverflowType.LS_ITERATIONS)
+    task.tensor(task.data, 'overflow')[0] = limits
+    assert not capacity_health(env).any()
+    task._check_capacity(task.data)
+    task.tensor(task.data, 'overflow')[1] = int(mujoco_warp.OverflowType.NEFC) | limits
     capacity_health(env)
     task.tensor(task.data, 'overflow').zero_()
     with pytest.raises(RuntimeError, match='during a physics substep'):

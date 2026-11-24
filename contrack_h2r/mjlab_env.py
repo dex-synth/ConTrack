@@ -1,7 +1,9 @@
 """ConTrack task terms on MJLab's environment and official RSL-RL wrapper."""
 
 from dataclasses import dataclass
-from importlib.metadata import version
+from importlib.metadata import distribution, version
+import json
+from pathlib import Path
 
 import mujoco
 import mujoco_warp
@@ -20,14 +22,30 @@ from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.scene import SceneCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
+from mjlab.utils.spec import attach_unprefixed
 
 from rsl_rl_contrack.sharpa_recipe import CONTROL_HZ, NUM_ENVS, PHYSICS_HZ, PROVENANCE
 
-from .inputs import STATE_REFRESH, load_prepared, prepared_task
-from .mjwarp_scene import Scene
+from .inputs import STATE_REFRESH, load_prepared, prepared_task, read_json
+from .mjwarp_scene import Scene, options, require_runtime_mujoco
 from .reference import Reference
 from .resets import ResetLibrary
 from .rewards import pose_error, reward_groups, velocity_groups
+
+# MuJoCo Warp 4 also flags reaching the solver and line-search iteration limits in Data.overflow.
+# Those are a property of the common solver settings, not exhausted contact/constraint storage.
+CAPACITY_OVERFLOW = int(mujoco_warp.OverflowType.ALL
+                        & ~(mujoco_warp.OverflowType.ITERATIONS | mujoco_warp.OverflowType.LS_ITERATIONS))
+
+
+def package_source(name):
+    """Version plus the VCS commit of a direct (unreleased) install; MJLab main reuses release versions."""
+    dist = distribution(name)
+    direct = json.loads(dist.read_text('direct_url.json') or 'null')
+    if direct is None:
+        return {'version': dist.version}
+    return {'version': dist.version, 'url': direct['url'],
+            'commit': direct.get('vcs_info', {}).get('commit_id')}
 
 
 class TaskState:
@@ -59,7 +77,14 @@ class TaskState:
                     or not np.allclose(gpu, expected, atol=1e-7, rtol=1e-5)):
                 raise ValueError(f'MJLab changed the shared asset field: {name}')
             checked.append(name)
+        # The timestep is the method's own (not in OPTIONS); every other option stays the task's.
+        expected_options, actual_options = options(self.scene.model), options(m)
+        changed = [k for k in expected_options
+                   if not np.allclose(actual_options[k], expected_options[k], atol=0, rtol=1e-12)]
+        if changed:
+            raise ValueError(f'MJLab changed the shared simulation options: {changed}')
         self.audit = dict(backend='mujoco_warp', environment='mjlab', mjlab=version('mjlab'),
+                          mjlab_source=package_source('mjlab'), options=actual_options,
                           mujoco=mujoco.__version__, mujoco_warp=mujoco_warp.__version__,
                           warp=wp.__version__, torch=torch.__version__, gpu_checked=checked,
                           timestep_s=self.dt, control_dt_s=self.step_dt, num_envs=self.num_envs,
@@ -193,7 +218,8 @@ class TaskState:
 
     def _check_capacity(self, data):
         if ((self.tensor(data, 'nacon')[0] > data.naconmax)
-                | (self.tensor(data, 'nefc') > data.njmax).any() | self.tensor(data, 'overflow').any()):
+                | (self.tensor(data, 'nefc') > data.njmax).any()
+                | (self.tensor(data, 'overflow') & CAPACITY_OVERFLOW).any()):
             raise RuntimeError('MJWarp contact/constraint capacity exceeded; increase the explicit capacities')
 
     def _contacts(self, data):
@@ -298,7 +324,8 @@ def capacity_health(env):
     if task.physics_qpos is not None:  # This per-substep term runs right after each physics step.
         task.physics_qpos.append(task.tensor(data, 'qpos').clone())
     overflow = ((task.tensor(data, 'nacon')[0] > data.naconmax)
-                | (task.tensor(data, 'nefc') > data.njmax) | (task.tensor(data, 'overflow') != 0))
+                | (task.tensor(data, 'nefc') > data.njmax)
+                | ((task.tensor(data, 'overflow') & CAPACITY_OVERFLOW) != 0))
     task.capacity_overflow.logical_or_(overflow)
     return overflow.float()
 
@@ -310,6 +337,10 @@ class ConTrackEnv(ManagerBasedRlEnv):
                  constraints_per_world=4096, *, physics_hz=PHYSICS_HZ, control_hz=CONTROL_HZ, seed=0):
         self.binding, self.arrays = load_prepared(prepared)
         self.h2r_task = task = prepared_task(prepared, self.binding)
+        require_runtime_mujoco(task)
+        prepared_with = read_json(Path(prepared) / 'training_physics.json')['mujoco_version']
+        if prepared_with != mujoco.__version__:
+            raise ValueError(f'Prepared with MuJoCo {prepared_with}, running {mujoco.__version__}: prepare again')
         if not np.isfinite([physics_hz, control_hz]).all() or min(physics_hz, control_hz) <= 0:
             raise ValueError('Training frequencies must be positive and finite')
         if control_hz != CONTROL_HZ:
@@ -326,7 +357,8 @@ class ConTrackEnv(ManagerBasedRlEnv):
         def attach_scene(spec):
             spec.option = source.option
             spec.nkey = source.nkey
-            spec.attach(source, prefix='', frame=spec.worldbody.add_frame())
+            # The same unprefixed attach, without MuJoCo 4's warning about saving it (never saved here).
+            attach_unprefixed(spec, source, spec.worldbody.add_frame())
 
         physics = MujocoCfg(timestep=1 / physics_hz,
                             integrator=mujoco.mjtIntegrator(opt.integrator).name.removeprefix('mjINT_').lower(),

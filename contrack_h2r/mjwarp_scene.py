@@ -3,6 +3,26 @@
 import mujoco
 import numpy as np
 
+# Simulation options compared between the sealed task model and a training copy; the
+# training copy sets its own timestep and nothing else.
+OPTIONS = ('integrator', 'solver', 'cone', 'jacobian', 'iterations', 'tolerance', 'ls_iterations',
+           'ls_tolerance', 'noslip_iterations', 'noslip_tolerance', 'ccd_iterations', 'ccd_tolerance',
+           'sdf_iterations', 'sdf_initpoints', 'impratio', 'gravity', 'wind', 'magnetic', 'density',
+           'viscosity', 'o_margin', 'o_solref', 'o_solimp', 'o_friction', 'enableflags', 'disableflags',
+           'disableactuator', 'sleep_tolerance')
+
+
+def require_runtime_mujoco(task):
+    """A task compiled by another MuJoCo can still load here, with that version's compiled parameters."""
+    compiled = {task.compiled[part]['mujoco_version'] for part in ('robot', 'base_scene')}
+    if compiled != {mujoco.__version__}:
+        raise ValueError(f'Task compiled with MuJoCo {sorted(compiled)}, running {mujoco.__version__}: '
+                         'use a task prepared by the benchmark for this MuJoCo version')
+
+
+def options(model):
+    return {name: np.asarray(getattr(model.opt, name)).tolist() for name in OPTIONS}
+
 
 class Scene:
     def __init__(self, path, layout):
@@ -18,6 +38,11 @@ class Scene:
             if len(ids) != 1:
                 raise ValueError('Expected one joint actuator per controlled joint')
             a = ids[0]
+            # MuJoCo 4: one position input stored at ctrl[a], without delay or history.
+            if (m.actuator_ctrladr[a] != a or m.actuator_ctrlnum[a] != 1
+                    or m.actuator_ctrlspec[a] != mujoco.mjtCtrlInput.mjINPUT_POS
+                    or m.actuator_delay[a] != 0 or np.any(m.actuator_history[a] != 0)):
+                raise ValueError('Expected one undelayed position control per actuator')
             if (m.actuator_gaintype[a] != 0 or m.actuator_biastype[a] != 1 or m.actuator_dyntype[a] != 0
                     or m.actuator_gainprm[a, 0] <= 0
                     or not np.allclose(m.actuator_biasprm[a, :2], [0, -m.actuator_gainprm[a, 0]])
@@ -71,6 +96,10 @@ class Scene:
                   'dof_frictionloss', 'geom_bodyid', 'geom_type', 'geom_size', 'geom_friction',
                   'geom_solref', 'geom_solimp', 'geom_contype', 'geom_conaffinity',
                   'geom_condim', 'geom_margin', 'geom_gap', 'geom_pos', 'geom_quat',
+                  'geom_priority', 'geom_solmix', 'jnt_margin', 'jnt_solref', 'jnt_solimp',
+                  'dof_solref', 'dof_solimp',
                   'actuator_gainprm', 'actuator_biasprm', 'actuator_ctrlrange', 'actuator_forcerange',
-                  'actuator_ctrllimited', 'actuator_forcelimited')
+                  'actuator_ctrllimited', 'actuator_forcelimited', 'actuator_ctrladr', 'actuator_ctrlnum',
+                  'actuator_ctrlspec', 'actuator_delay', 'actuator_history', 'actuator_armature',
+                  'actuator_damping', 'actuator_dampingpoly')
         return {k: getattr(m, k).tolist() for k in fields}

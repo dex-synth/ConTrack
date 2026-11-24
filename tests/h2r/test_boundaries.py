@@ -6,11 +6,11 @@ import torch
 
 from contrack_h2r.inputs import implementation_hashes, load_prepared, local_file, prepared_task
 from contrack_h2r.layout import make_layout
-from contrack_h2r.mjwarp_scene import Scene
+from contrack_h2r.mjwarp_scene import Scene, require_runtime_mujoco
 from contrack_h2r.reference import Reference
 from contrack_h2r.resets import ResetLibrary
 
-from conftest import LAYOUT, write_prepared
+from conftest import LAYOUT, SCENE, write_prepared, write_task
 
 
 def test_sealed_files_and_paths(prepared):
@@ -41,6 +41,23 @@ def test_task_package_is_the_only_input(prepared, tmp_path):
     with pytest.raises(ValueError, match='Expected h2r-task-v1'):
         load_task(old)
     assert 'h2r/requirements.lock' in implementation_hashes()
+
+
+def test_task_compiled_by_another_mujoco_is_rejected(tmp_path):
+    require_runtime_mujoco(write_task(tmp_path / 'current'))
+    # An older task can still compile here, but with that version's compiled parameters.
+    old = write_task(tmp_path / 'old', mujoco_version='3.11.0')
+    with pytest.raises(ValueError, match='Task compiled with MuJoCo'):
+        require_runtime_mujoco(old)
+
+
+def test_actuators_must_be_single_undelayed_position_controls(tmp_path):
+    delayed = SCENE.replace('<position joint="x" kp="100" kv="10"/>',
+                            '<position joint="x" kp="100" kv="10" delay="0.01" nsample="3"/>')
+    assert delayed != SCENE
+    task = write_task(tmp_path / 'task', scene=delayed)
+    with pytest.raises(ValueError, match='undelayed position control'):
+        Scene(task.scene_xml, LAYOUT)
 
 
 def test_reference_must_fill_whole_policy_periods(tmp_path):

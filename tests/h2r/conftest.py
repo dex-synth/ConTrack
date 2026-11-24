@@ -5,7 +5,7 @@ import mujoco
 import numpy as np
 import pytest
 
-from contrack_h2r.inputs import PREPARED_FORMAT, seal_prepared
+from contrack_h2r.inputs import PREPARED_FORMAT, seal_prepared, write_json
 from contrack_h2r.reset_reference import reset_reference
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
 
@@ -28,7 +28,7 @@ LAYOUT = dict(hands=['right'], joint_names=['x', 'yaw', 'finger'], joint_units=[
               wrist_error_scales={'translation_m': 1., 'rotation_rad': 1.})
 
 
-def write_task(root, reference_hz=30., frames=4):
+def write_task(root, reference_hz=30., frames=4, mujoco_version=mujoco.__version__, scene=SCENE):
     """Seal a standalone toy task with h2r_io; returns the loaded Task."""
     demo, robot = root / 'demo', root / 'robot'
     demo.mkdir(parents=True)
@@ -69,8 +69,10 @@ def write_task(root, reference_hz=30., frames=4):
                             'wrist_rotation_joints': ['yaw'], 'finger_joints': ['finger']}}}))
     robot_io.seal_robot(robot, 'toy_hand', ['right'], mjcf='robot.xml', urdf='robot.urdf',
                         hand_urdfs={'right': 'robot.urdf'})
-    (root / 'scene.xml').write_text(SCENE)
-    (root / 'compiled.json').write_text('{}')
+    (root / 'scene.xml').write_text(scene)
+    # The MuJoCo that compiled the task, as the benchmark records it.
+    compiled = {'mujoco_version': mujoco_version}
+    (root / 'compiled.json').write_text(json.dumps({'robot': compiled, 'base_scene': compiled}))
     task_io.seal_task(root, 'demo', 'robot')
     return task_io.load_task(root)
 
@@ -86,6 +88,7 @@ def write_prepared(root, **task_options):
                   qpos=np.tile(model.qpos0, (frames, 1)))
     qpos, qvel, _ = reset_reference(model, LAYOUT, arrays)
     np.savez(root / 'reference.npz', **arrays, reset_qpos=qpos, reset_qvel=qvel)
+    write_json(root / 'training_physics.json', {'mujoco_version': mujoco.__version__})
     seal_prepared(root, dict(format=PREPARED_FORMAT, reference_recipe=RECIPE_ID, layout=LAYOUT, task_id=task.task_id,
                              demo_id=task.demo.demo_id, robot_id=task.robot.robot_id))
     return root

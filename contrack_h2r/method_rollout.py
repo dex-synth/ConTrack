@@ -10,7 +10,6 @@ and each is one trajectory. The benchmark imports and scores the package itself.
 """
 
 import argparse
-from importlib.metadata import version
 from pathlib import Path
 
 from h2r_io.method_rollout import state_names, write_method_rollout
@@ -20,6 +19,7 @@ import numpy as np
 
 from .controller import METHOD
 from .inputs import load_prepared, prepared_task, read_json
+from .mjlab_env import package_source
 from .native_rollout import rollout
 
 WORLDS = 10
@@ -31,6 +31,10 @@ CONDITIONS = {
     'disturbance': 'none',  # the recipe has no randomization or push events
     'action': 'deterministic',  # ActorCritic.act_inference
 }
+
+
+def mjlab_label(source):
+    return f"{source['version']} @ {source['commit'][:10]}" if source.get('commit') else source['version']
 
 
 def export(prepared, checkpoint, output, *, num_envs=WORLDS, device='cuda:0'):
@@ -45,8 +49,9 @@ def export(prepared, checkpoint, output, *, num_envs=WORLDS, device='cuda:0'):
     summary, arrays = rollout(prepared, checkpoint, num_envs=num_envs, device=device, initial_velocity='zero',
                               physics_states=True)
     trained = read_json(Path(checkpoint).with_suffix('.json'))  # rollout() verified it against the checkpoint
-    runtime = {'mjlab': version('mjlab'), 'mujoco_warp': mujoco_warp.__version__}
-    if any(trained['training_physics'][name] != value for name, value in runtime.items()):
+    runtime = {'mjlab_source': package_source('mjlab'), 'mujoco': mujoco.__version__,
+               'mujoco_warp': mujoco_warp.__version__}
+    if any(trained['training_physics'].get(name) != value for name, value in runtime.items()):
         raise ValueError(f'The checkpoint was not trained with this simulator: {runtime}')
     physics_dt, control_dt = summary['physics']['timestep_s'], summary['physics']['control_dt_s']
     substeps, steps = round(control_dt / physics_dt), round(task.duration_s / physics_dt)
@@ -90,7 +95,7 @@ def export(prepared, checkpoint, output, *, num_envs=WORLDS, device='cuda:0'):
         # As reported to the evaluation in start (contrack_h2r.controller).
         controller={**summary['checkpoint'], 'prepared_id': summary['prepared_id']},
         training_seed=trained['seed'],
-        simulator={'name': 'mjwarp', 'version': f"{runtime['mujoco_warp']} (mjlab {runtime['mjlab']})",
+        simulator={'name': 'mjwarp', 'version': f"{runtime['mujoco_warp']} (mjlab {mjlab_label(runtime['mjlab_source'])})",
                    'physics_dt_s': physics_dt, 'control_dt_s': control_dt, 'device': device, 'deterministic': False},
         conditions=CONDITIONS,
         criteria='Native rule of the training setup: the world reaches the end of the reference without a '

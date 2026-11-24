@@ -34,3 +34,4 @@ data/xhand/*
 !data/sharpa/
 data/sharpa/*
 !data/sharpa/*.h5
+MUJOCO_LOG.TXT

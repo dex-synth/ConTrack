@@ -52,7 +52,8 @@ class H2RRunner(OnPolicyRunner):
         for key in ('format', 'recipe', 'prepared_id', 'layout', 'train_config'):
             if metadata.get(key) != self.deployment[key]:
                 raise ValueError(f'Checkpoint differs from this training task: {key}')
-        for key in ('environment', 'timestep_s', 'control_dt_s', 'num_envs'):
+        for key in ('environment', 'mjlab_source', 'mujoco', 'mujoco_warp', 'timestep_s', 'control_dt_s',
+                    'num_envs'):
             if metadata['training_physics'].get(key) != self.task.audit[key]:
                 raise ValueError(f'Checkpoint training setting differs: {key}')
         infos = self.load(path, map_location=self.device)

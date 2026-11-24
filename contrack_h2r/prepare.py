@@ -12,7 +12,7 @@ import numpy as np
 from .contacts import DEFAULT_CONTACT_DISTANCE_M, reference_contacts
 from .inputs import PREPARED_FORMAT, implementation_hashes, seal_prepared, write_json
 from .layout import make_layout
-from .mjwarp_scene import Scene
+from .mjwarp_scene import Scene, options, require_runtime_mujoco
 from .retarget import PENETRATION_REPORT_M, RECIPE, penetration_report, retarget
 from .reset_reference import reset_reference
 from rsl_rl_contrack.sharpa_recipe import RECIPE_ID
@@ -26,6 +26,7 @@ def prepare(task, output, *, mano_root, loader_python, ik_python,
     if not np.isfinite(contact_distance) or contact_distance <= 0:
         raise ValueError('Invalid preparation parameters')
     source = load_task(task)
+    require_runtime_mujoco(source)
     if any(output.is_relative_to(p) for p in (source.path, source.demo.path, source.robot.path)):
         raise ValueError('Output must be outside sealed inputs')
     output.mkdir(parents=True)
@@ -59,7 +60,8 @@ def prepare(task, output, *, mano_root, loader_python, ik_python,
                    'contact_positive_slots': int(contact.sum()),
                    'contact_recipe': 'nearest MANO bone skin segmentation; mean surface points within threshold; 15-to-10 OR/mean'})
         write_json(output / 'training_physics.json', {'source': 'unmodified common task MJCF',
-                   'mujoco_version': mujoco.__version__, 'compiled': scene.audit()})
+                   'mujoco_version': mujoco.__version__, 'options': options(scene.model),
+                   'compiled': scene.audit()})
         revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).resolve().parents[1], text=True).strip()
         seal_prepared(output, dict(format=PREPARED_FORMAT, reference_recipe=RECIPE_ID, source_revision=revision,
                       implementation_sha256=implementation_hashes(),
